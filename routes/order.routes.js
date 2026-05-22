@@ -20,7 +20,7 @@ router.get('/:id/invoice', printInvoice);
 router.patch('/updateDelivery', isAdmin, updateDeliveryStatus);
 router.patch('/prepared/:id', isSeller, confirmPreparation);
 router.patch('/prepared/:orderId/item/:itemId', isSeller, confirmItemPreparation);
-// router.post('/update-payment', updatePayment);
+router.patch('/update-payment',isAdmin, updatePayment);
 // payment
 // router.get("/check-out-session/:cartId", verifyToken, checkOutSession);
 

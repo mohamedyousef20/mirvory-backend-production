@@ -5,6 +5,7 @@ import SecretCode from '../models/secretCode.model.js';
 import Cart from '../models/cart.model.js'
 import mongoose from 'mongoose';
 import { createNotifications } from '../utils/notification.js';
+import Notification from '../models/notification.model.js';
 
 export const createOrderFilterObj = (req, res, next) => {
   let filterObj = {};
@@ -132,26 +133,39 @@ const generateUniqueSecretCode = async (buyerId) => {
 };
 
 
-
 export const updatePayment = async (req, res) => {
   try {
-    const { orderId, paymentMethod, totalAmount } = req.body;
+
+    const { orderId, paymentStatus } = req.body;
+    console.log(orderId, 'orderId45')
+    console.log(paymentStatus, 'paymentStatus45')
+    if (!orderId) {
+      return res.status(400).json({ message: 'orderId is required' });
+    }
+
+    const allowedStatuses = ['pending', 'paid', 'failed'];
+
+    if (paymentStatus && !allowedStatuses.includes(paymentStatus)) {
+      return res.status(400).json({ message: 'Invalid payment status' });
+    }
 
     const order = await Order.findById(orderId);
+
     if (!order) {
       return res.status(404).json({ message: 'Order not found' });
     }
 
-    // Update payment details
-    order.paymentMethod = paymentMethod;
-    order.total = totalAmount;
-    order.paymentStatus = 'completed';
+    order.paymentStatus = paymentStatus;
 
     await order.save();
 
-    res.status(200).json({ message: 'Payment updated successfully' });
+    res.status(200).json({
+      message: 'Payment status updated successfully',
+      order,
+    });
+
   } catch (error) {
-    console.error('Payment update error:', error);
+    console.error(error);
     res.status(500).json({ message: 'Internal server error' });
   }
 };
@@ -160,12 +174,19 @@ export const updatePayment = async (req, res) => {
 
 export const createOrder = async (req, res, next) => {
   try {
-    // Get cart
+    const { deliveryMethod, paymentMethod, deliveryInfo } = req.body;
+
+    if (!deliveryInfo || !deliveryInfo.fullName || !deliveryInfo.phone) {
+      return res.status(400).json({
+        message: "Missing core delivery info. fullName and phone are required inside deliveryInfo.",
+      });
+    }
+
     const cart = await Cart.findOne({ user: req.user._id }).populate({
       path: "items.product",
       populate: {
         path: "seller",
-        select: "_id firstName lastName",
+        select: "_id name email phone",
       },
     });
 
@@ -175,98 +196,21 @@ export const createOrder = async (req, res, next) => {
       });
     }
 
-    // Calculate totals
+    // 3. حساب العمليات الحسابية المالية
     const subtotal = cart.items.reduce(
       (sum, item) => sum + item.product.price * item.quantity,
       0
     );
 
-    // const discount = Math.min(50, subtotal * 0.1);خصم 10% بحد أقصى 50 جنيه
     const discount = 0;
-    const shippingFee = subtotal > 500 ? 0 : 70;
+    const shippingFee = (subtotal > 500 || deliveryMethod === "pickup") ? 0 : 70;
     const total = subtotal - discount + shippingFee;
 
-    // Create order
-    const order = await Order.create({
-      buyer: req.user._id,
-      items: cart.items.map((item) => ({
-        product: item.product._id,
-        seller: item.product.seller._id,
-        quantity: item.quantity,
-        price: item.product.price,
-        color: item.color,
-        size: item.size,
-      })),
-      paymentMethod: req.body.paymentMethod,
-      subtotal,
-      discount,
-      shippingFee,
-      total,
-      paymentStatus: "pending",
-      deliveryStatus: "pending",
-      deliveryMethod: req.body.deliveryMethod,
-      pickupPoint: req.body.pickupPoint,
-      secretCode: await generateUniqueSecretCode(req.user._id),
-    });
-
-    // ==============================
-    // SEND SELLER NOTIFICATIONS
-    // ==============================
-    try {
-      const io = req.app.get("io");
-
-      // Group items by seller
-      const sellerItemsMap = {};
-
-      cart.items.forEach((item) => {
-        const sellerId = item.product.seller._id.toString();
-
-        if (!sellerItemsMap[sellerId]) {
-          sellerItemsMap[sellerId] = {
-            sellerId,
-            items: [],
-          };
-        }
-
-        sellerItemsMap[sellerId].items.push(item);
-      });
-
-      // Send notification per seller
-      for (const sellerId of Object.keys(sellerItemsMap)) {
-        const sellerData = sellerItemsMap[sellerId];
-
-        await createNotifications({
-          io,
-          title: "طلب جديد 🔔",
-          message: `لديك طلب جديد يحتوي على ${sellerData.items.length} منتج. رقم الطلب: ${order._id
-            .toString()
-            .slice(-6)}`,
-          type: "order_placed",
-          actor: req.user._id, // buyer
-          userIds: [sellerId],
-          data: {
-            orderId: order._id,
-            itemsCount: sellerData.items.length,
-            buyerId: req.user._id,
-          },
-          link: `/seller/orders/${order._id}`,
-        });
-      }
-    } catch (notificationError) {
-      console.error(
-        "Failed to create seller notifications:",
-        notificationError
-      );
-    }
-
-    // ==============================
-    // UPDATE PRODUCTS
-    // ==============================
     const bulkOps = cart.items.map((item) => ({
       updateOne: {
         filter: {
           _id: item.product._id,
-          quantity: { $gte: item.quantity }, // Prevent overselling
+          quantity: { $gte: item.quantity },
         },
         update: {
           $inc: {
@@ -277,39 +221,92 @@ export const createOrder = async (req, res, next) => {
       },
     }));
 
-    try {
-      const result = await Product.bulkWrite(bulkOps, {
-        ordered: false,
-      });
+    const result = await Product.bulkWrite(bulkOps, { ordered: false });
 
-      if (result.modifiedCount !== cart.items.length) {
-        throw new Error(
-          `Expected ${cart.items.length} updates, got ${result.modifiedCount}`
-        );
-      }
-    } catch (error) {
-      console.error("Product quantity update failed:", error);
-      throw new Error(
-        "Failed to update product quantities. Please try again."
-      );
+    if (result.modifiedCount !== cart.items.length) {
+      return res.status(400).json({
+        message: "Some products in your cart became out of stock. Please update your cart.",
+      });
     }
 
-    // Clear cart
-    await Cart.findOneAndDelete({
-      user: req.user._id,
+    const order = new Order({
+      buyer: req.user._id,
+      items: cart.items.map((item) => ({
+        product: item.product._id,
+        seller: item.product.seller._id,
+        quantity: item.quantity,
+        price: item.product.price,
+        color: item.color,
+        size: item.size,
+      })),
+      paymentMethod: paymentMethod || "cash",
+      paymentStatus: "pending",
+      deliveryStatus: "pending",
+      deliveryMethod: deliveryMethod || "home",
+
+      deliveryInfo: {
+        fullName: deliveryInfo.fullName.trim(),
+        phone: deliveryInfo.phone.trim(),
+        address: deliveryMethod === "home" ? deliveryInfo.address : undefined,
+        pickupPoint: deliveryMethod === "pickup" ? deliveryInfo.pickupPoint : undefined,
+      },
+
+      subtotal,
+      discount,
+      shippingFee,
+      total,
+      secretCode: await generateUniqueSecretCode(req.user._id),
     });
 
-    // Success response
+    await order.save();
+
+    try {
+      const io = req.app.get("io");
+      const sellerItemsMap = {};
+
+      cart.items.forEach((item) => {
+        const sellerId = item.product.seller._id.toString();
+        if (!sellerItemsMap[sellerId]) {
+          sellerItemsMap[sellerId] = { sellerId, items: [] };
+        }
+        sellerItemsMap[sellerId].items.push(item);
+      });
+
+      for (const sellerId of Object.keys(sellerItemsMap)) {
+        const sellerData = sellerItemsMap[sellerId];
+        await createNotifications({
+          io,
+          title: "طلب جديد 🔔",
+          message: `لديك طلب جديد يحتوي على ${sellerData.items.length} منتج. رقم الطلب: ${order.orderNumber || order._id.toString().slice(-6)}`,
+          type: "order_placed",
+          actor: req.user._id,
+          userIds: [sellerId],
+          data: {
+            orderId: order._id,
+            itemsCount: sellerData.items.length,
+            buyerId: req.user._id,
+          },
+          link: `/seller/orders/${order._id}`,
+        });
+      }
+    } catch (notificationError) {
+      console.error("Notification system non-blocking failure:", notificationError);
+    }
+
+    // 7. حذف السلة بعد إتمام العملية بنجاح كامل
+    await Cart.findOneAndDelete({ buyer: req.user._id });
+
+    // استجابة النجاح
     res.status(201).json({
       status: "success",
       message: "Order created successfully",
       data: order,
     });
+
   } catch (error) {
     next(error);
   }
 };
-
 // get all orders (admin)
 export const getAdminOrders = async (req, res) => {
   try {
@@ -363,8 +360,8 @@ export const getSellerOrders = async (req, res) => {
       .select('-secretCode -discount -payoutProcessed')
       .populate('items.product', 'title titleEn images')
       .lean();
-    console.log(req.user,'ord')
-        const filteredOrders = orders.map(order => {
+    console.log(req.user, 'ord')
+    const filteredOrders = orders.map(order => {
       // فلترة المنتجات الخاصة بالبائع الحالي فقط
       const sellerItems = order.items.filter(
         item => item.seller?._id.toString() === req.user._id.toString()

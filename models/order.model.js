@@ -35,15 +35,33 @@ const orderSchema = new mongoose.Schema({
   ],
 
   deliveryInfo: {
-    fullName: String,
-    phoneNumber: String,
-    address: String,
+    fullName: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    phone: {
+      type: String,
+      required: true,
+      match: /^01[0125][0-9]{8}$/
+    },
+
+    address: {
+      type: String,
+      required: function () {
+        return this.deliveryMethod === "home";
+      }
+    },
+
     pickupPoint: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "PickupPoint",
-    },
+      required: function () {
+        return this.deliveryMethod === "pickup";
+      }
+    }
   },
-
   paymentMethod: {
     type: String,
     enum: ["cash", "card"],
@@ -100,13 +118,7 @@ const orderSchema = new mongoose.Schema({
 });
 
 
-// =====================================
-// ORDER NUMBER MIDDLEWARE
-// Format:
-// MMDD + Last3Buyer + Random3
-// مثال:
-// 0503501234
-// =====================================
+
 orderSchema.pre("save", async function (next) {
   if (!this.isNew || this.orderNumber) return next();
 
@@ -152,7 +164,7 @@ orderSchema.pre("save", async function (next) {
 orderSchema.pre(/^find/, function (next) {
   this.populate({
     path: "items.seller",
-    select: "name email phone wallet",
+    select: " email phone firstName lastName wallet ",
   })
     .populate({
       path: "items.product",

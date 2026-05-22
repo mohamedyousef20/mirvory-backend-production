@@ -81,7 +81,7 @@ export const createReturnRequest = async (req, res) => {
       seller: orderItem.seller,
       reason,
       item: itemId,
-      images: images || [],   
+      images: images || [],
       status: 'pending'
     });
 
@@ -325,5 +325,39 @@ export const deleteReturnRequest = async (req, res) => {
       success: false,
       message: 'خطأ في الخادم'
     });
+  }
+};
+
+
+export const getReturnRequestById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const returnRequest = await ReturnRequest.findById(id)
+      .populate('order')
+      .populate('product')
+      .populate('user', 'firstName lastName email')
+      .populate('seller', 'firstName lastName email');
+
+    if (!returnRequest) {
+      return res.status(404).json({ message: 'Return request not found' });
+    }
+
+    // 🔒 AUTHORIZATION CHECK
+    const userId = req.user._id.toString();
+    const role = req.user.role;
+
+    const isOwner = returnRequest.user._id.toString() === userId;
+
+    const isAdmin = role === 'admin';
+
+    if (!isOwner && !isSeller && !isAdmin) {
+      return res.status(403).json({ message: 'Not allowed to access this request' });
+    }
+    console.log(returnRequest,'25x')
+    res.status(200).json(returnRequest);
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: error.message });
   }
 };

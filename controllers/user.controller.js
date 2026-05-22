@@ -387,8 +387,8 @@ export const verifyEmail = async (req, res) => {
 
 export const getUserProfile = async (req, res) => {
   try {
-    console.log('im in profile ')
     const user = await User.findById(req.user._id);
+    console.log(user,'45454')
     res.json(user);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -637,7 +637,7 @@ export const changeUserPassword = async (req, res, next) => {
 };
 export const getMe = async (req, res, next) => {
   try {
-    console.log('im in getme')
+    console.log('getme')
     if (!req.user?.id) {
       return res.status(401).json({
         success: false,

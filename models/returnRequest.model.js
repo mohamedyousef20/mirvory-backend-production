@@ -83,9 +83,9 @@ const returnRequestSchema = new mongoose.Schema(
 );
 
 // TTL auto delete
-returnRequestSchema.index(
-  { deleteAt: 1 },
-  { expireAfterSeconds: 0 }
-);
+// returnRequestSchema.index(
+//   { deleteAt: 1 },
+//   { expireAfterSeconds: 0 }
+// );
 
 export default mongoose.model('ReturnRequest', returnRequestSchema);

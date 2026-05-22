@@ -1,5 +1,5 @@
 import express from 'express';
-import { createReturnRequest, deleteReturnRequest, getReturnRequests, getReturnRequestsForAdmin, updateReturnStatus } from '../controllers/return.controller.js';
+import { createReturnRequest, deleteReturnRequest, getReturnRequestById, getReturnRequests, getReturnRequestsForAdmin, updateReturnStatus } from '../controllers/return.controller.js';
 import { isAdmin, protect } from '../middlewares/auth.js';
 
 const router = express.Router();
@@ -13,6 +13,8 @@ router.post('/', createReturnRequest);
 router.get('/', getReturnRequests);
 
 router.get('/admin', isAdmin, getReturnRequestsForAdmin);
+
+router.get('/:id', getReturnRequestById);
 
 router.patch('/', isAdmin, updateReturnStatus);
 
