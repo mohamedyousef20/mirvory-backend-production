@@ -333,7 +333,7 @@ export const getReturnRequestById = async (req, res) => {
   try {
     const { id } = req.params;
     const returnRequest = await ReturnRequest.findById(id)
-      .populate('order')
+      .populate('order', 'orderNumber createdAt')
       .populate('product')
       .populate('user', 'firstName lastName email')
       .populate('seller', 'firstName lastName email');
@@ -353,7 +353,7 @@ export const getReturnRequestById = async (req, res) => {
     if (!isOwner && !isSeller && !isAdmin) {
       return res.status(403).json({ message: 'Not allowed to access this request' });
     }
-    console.log(returnRequest,'25x')
+    console.log(returnRequest, '25x')
     res.status(200).json(returnRequest);
 
   } catch (error) {
