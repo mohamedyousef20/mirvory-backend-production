@@ -9,10 +9,10 @@ import {
 import {
   getCart,
   addToCart,
-  updateCartItem,
   removeFromCart,
   clearCart,
   getCartCount,
+  updateCartItem,
 
 } from '../controllers/cart.controller.js';
 
@@ -33,7 +33,7 @@ router.post('/', addToCart);
 // @route   PUT /api/cart/:itemId
 // @desc    Update cart item
 // @access  Private
-router.put('/:itemId', updateCartItem);
+router.patch('/increase', updateCartItem);
 
 // @route   DELETE /api/cart/:itemId
 // @desc    Remove item from cart

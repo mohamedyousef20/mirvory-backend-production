@@ -1,147 +1,111 @@
-import Cart from '../models/cart.model.js'
+import Cart from '../models/cart.model.js';
 import Product from '../models/product.model.js';
 import asyncHandler from 'express-async-handler';
+import createError from '../utils/error.js';
 
-// @desc    Get user cart
-// @route   GET /api/cart
-// @access  Private
-export const getCart = asyncHandler(async (req, res) => {
-  console.log(req.user._id,'req.user.id')
+export const getCart = asyncHandler(async (req, res, next) => {
   const cart = await Cart.findOne({ user: req.user._id })
-    .populate({
-      path: 'items.product',
-      select: 'title titleEn images price seller'
-    });
+    .populate({ path: 'items.product', select: 'title titleEn images price seller quantity' });
 
-  if (!cart) {
-    return res.status(404).json({ message: 'Cart not found' });
-  }
-
+  if (!cart) return res.status(404).json({ message: 'السلة غير موجودة' });
   res.json(cart);
 });
 
-// @desc    Add item to cart
-// @route   POST /api/cart
-// @access  Private
-export const addToCart = asyncHandler(async (req, res) => {
-  console.log(req.body, 'cart function>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<')
-
+export const addToCart = asyncHandler(async (req, res, next) => {
   const { productId } = req.body;
-  let { quantity, sizes, colors } = req.body;
+  let { quantity = 1, sizes, colors } = req.body;
 
-  quantity = parseInt(quantity) || 1;
+  quantity = parseInt(quantity);
+  if (quantity <= 0) return next(new createError("الكمية يجب أن تكون أكبر من صفر", 400));
+
   sizes = Array.isArray(sizes) ? sizes : (sizes ? [sizes] : []);
   colors = Array.isArray(colors) ? colors : (colors ? [colors] : []);
 
-  // التحقق من وجود المنتج
-  const product = await Product.findById(productId);
-  if (!product) {
-    return res.status(404).json({ message: 'Product not found' });
-  }
+  const product = await Product.findById(productId).lean();
+  if (!product) return next(new createError("المنتج غير موجود", 404));
 
-  // فرض حدود المخزون
-  let cart = await Cart.findOne({ user: req.user._id });
-  const existingQty = cart ? cart.items
-    .filter(i => i.product.toString() === productId)
-    .reduce((sum, i) => sum + i.quantity, 0) : 0;
-  if (existingQty + quantity > product.quantity) {
-    return res.status(400).json({ message: 'Requested quantity exceeds stock' });
-  }
+  let cart = await Cart.findOneAndUpdate(
+    { user: req.user._id },
+    { $setOnInsert: { user: req.user._id, items: [] } },
+    { upsert: true, new: true }
+  );
 
-  // تحقق من التوافق بين الكمية والاختيارات
-  if (sizes.length && sizes.length !== quantity) {
-    return res.status(400).json({ message: 'Sizes count must equal quantity' });
-  }
-  if (colors.length && colors.length !== quantity) {
-    return res.status(400).json({ message: 'Colors count must equal quantity' });
-  }
+  const existingQty = cart.items.filter(i => i.product.toString() === productId).reduce((sum, i) => sum + i.quantity, 0);
+  if (existingQty + quantity > product.quantity) return next(new createError("الكمية المطلوبة تتجاوز المخزون", 400));
+  if (sizes.length && sizes.length !== quantity) return next(new createError("عدد المقاسات يجب أن يطابق الكمية", 400));
+  if (colors.length && colors.length !== quantity) return next(new createError("عدد الألوان يجب أن يطابق الكمية", 400));
 
-  if (!cart) {
-    cart = await Cart.create({ user: req.user._id, items: [] });
-  }
-
-  // إضافة عناصر منفصلة لكل قطعة لاجل صيانة المقاسات/الألوان
   for (let i = 0; i < quantity; i++) {
-    cart.items.push({
-      product: productId,
-      quantity: 1,
-      price: product.price,
-      sizes: sizes.length ? [sizes[i]] : [],
-      colors: colors.length ? [colors[i]] : []
-    });
+    const currentSize = sizes.length ? sizes[i] : null;
+    const currentColor = colors.length ? colors[i] : null;
+
+    const existingItem = cart.items.find(item =>
+      item.product.toString() === productId &&
+      (item.sizes[0] || null) === currentSize &&
+      (item.colors[0] || null) === currentColor
+    );
+
+    if (existingItem) existingItem.quantity += 1;
+    else {
+      cart.items.push({
+        product: productId, quantity: 1, price: product.price,
+        sizes: currentSize ? [currentSize] : [], colors: currentColor ? [currentColor] : []
+      });
+    }
   }
 
-  await cart.updateTotal();
+  if (typeof cart.updateTotal === 'function') await cart.updateTotal();
   res.json(cart);
 });
 
-// @desc    Update cart item
-// @route   PUT /api/cart/:itemId
-// @access  Private
-export const updateCartItem = asyncHandler(async (req, res) => {
-  const { quantity } = req.body;
+export const updateCartItem = asyncHandler(async (req, res, next) => {
+  const { itemId, quantity } = req.body;
+  const parsedQty = parseInt(quantity);
+
+  if (parsedQty <= 0) return next(new createError("الكمية يجب أن تكون أكبر من صفر", 400));
+
   const cart = await Cart.findOne({ user: req.user._id });
+  if (!cart) return next(new createError("السلة غير موجودة", 404));
 
-  if (!cart) {
-    return res.status(404).json({ message: 'Cart not found' });
-  }
+  const item = cart.items.find(i => i._id.toString() === itemId);
+  if (!item) return next(new createError("المنتج غير موجود في السلة", 404));
 
-  const itemIndex = cart.items.findIndex(item => item._id.toString() === req.params.itemId);
+  const product = await Product.findById(item.product).select('quantity').lean();
+  if (product && parsedQty > product.quantity) return next(new createError("الكمية تتجاوز المخزون المتاح", 400));
 
-  if (itemIndex === -1) {
-    return res.status(404).json({ message: 'Item not found in cart' });
-  }
-
-  cart.items[itemIndex].quantity = quantity;
-  await cart.updateTotal();
+  item.quantity = parsedQty;
+  if (typeof cart.updateTotal === 'function') await cart.updateTotal();
+  else await cart.save();
 
   res.json(cart);
 });
 
-// @desc    Remove item from cart
-// @route   DELETE /api/cart/:itemId
-// @access  Private
-export const removeFromCart = asyncHandler(async (req, res) => {
+export const removeFromCart = asyncHandler(async (req, res, next) => {
   const cart = await Cart.findOne({ user: req.user._id });
-
-  if (!cart) {
-    return res.status(404).json({ message: 'Cart not found' });
-  }
+  if (!cart) return next(new createError("السلة غير موجودة", 404));
 
   cart.items = cart.items.filter(item => item._id.toString() !== req.params.itemId);
-  await cart.updateTotal();
+  if (typeof cart.updateTotal === 'function') await cart.updateTotal();
+  else await cart.save();
 
   res.json(cart);
 });
 
-// @desc    Clear cart
-// @route   DELETE /api/cart
-// @access  Private
-export const clearCart = asyncHandler(async (req, res) => {
+export const clearCart = asyncHandler(async (req, res, next) => {
   const cart = await Cart.findOne({ user: req.user._id });
-
-  if (!cart) {
-    return res.status(404).json({ message: 'Cart not found' });
-  }
+  if (!cart) return next(new createError("السلة غير موجودة", 404));
 
   cart.items = [];
   cart.total = 0;
+  cart.appliedCoupon = undefined;
   await cart.save();
 
   res.json(cart);
 });
 
-
 export const getCartCount = asyncHandler(async (req, res) => {
-  const cart = await Cart.findOne({ user: req.user._id });
-
+  const cart = await Cart.findOne({ user: req.user._id }).lean();
   let count = 0;
-  if (cart && cart.items) {
-    count = cart.items.reduce((total, item) => total + item.quantity, 0);
-  }
-
-  res.json({
-    success: true,
-    count
-  });
+  if (cart && cart.items) count = cart.items.reduce((total, item) => total + item.quantity, 0);
+  res.json({ success: true, count });
 });

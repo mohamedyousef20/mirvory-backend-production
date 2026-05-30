@@ -1,74 +1,92 @@
 import PickupPoint from '../models/pickupPoint.model.js';
+import mongoose from 'mongoose';
+import createError from '../utils/error.js';
 
-export const createPickupPoint = async (req, res) => {
+const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+
+export const createPickupPoint = async (req, res, next) => {
   try {
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+      throw createError("غير مصرح لك بإجراء هذه العملية", 403);
+    }
+
     const { stationName, location, address, phone, workingHours, status } = req.body;
+    if (!stationName || !address || !phone) {
+      throw createError("جميع الحقول الأساسية مطلوبة (اسم المحطة، العنوان، الهاتف)", 400);
+    }
 
     const pickupPoint = new PickupPoint({
-      stationName,
+      stationName: stationName.trim(),
       location,
-      address,
-      phone,
+      address: address.trim(),
+      phone: phone.trim(),
       workingHours,
       status: status || 'active'
     });
-    console.log(req.body,';;;;;;')
+
     await pickupPoint.save();
-    res.status(201).json(pickupPoint);
+    res.status(201).json({ status: "success", data: pickupPoint });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    next(error);
   }
 };
 
-export const getPickupPoints = async (req, res) => {
+export const getPickupPoints = async (req, res, next) => {
   try {
-    const pickupPoints = await PickupPoint.find();
-    res.json(pickupPoints);
+    const pickupPoints = await PickupPoint.find({ status: 'active' }).lean();
+    res.status(200).json(pickupPoints);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    next(error);
   }
 };
 
-export const updatePickupPoint = async (req, res) => {
+export const updatePickupPoint = async (req, res, next) => {
   try {
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+      throw createError("غير مصرح لك بإجراء هذه العملية", 403);
+    }
+
     const { id } = req.params;
+    if (!isValidObjectId(id)) throw createError("معرف نقطة الاستلام غير صالح", 400);
+
     const { stationName, location, address, phone, workingHours, status } = req.body;
 
     const updatedPickupPoint = await PickupPoint.findByIdAndUpdate(
       id,
       {
-        stationName,
+        stationName: stationName?.trim(),
         location,
-        address,
-        phone,
+        address: address?.trim(),
+        phone: phone?.trim(),
         workingHours,
         status,
         updatedAt: Date.now()
       },
-      { new: true } // Return the updated document
+      { new: true, runValidators: true }
     );
 
-    if (!updatedPickupPoint) {
-      return res.status(404).json({ message: 'Pickup point not found' });
-    }
+    if (!updatedPickupPoint) throw createError("نقطة الاستلام غير موجودة", 404);
 
-    res.json(updatedPickupPoint);
+    res.status(200).json({ status: "success", data: updatedPickupPoint });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    next(error);
   }
 };
 
-export const deletePickupPoint = async (req, res) => {
+export const deletePickupPoint = async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const deletedPickupPoint = await PickupPoint.findByIdAndDelete(id);
-
-    if (!deletedPickupPoint) {
-      return res.status(404).json({ message: 'Pickup point not found' });
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+      throw createError("غير مصرح لك بإجراء هذه العملية", 403);
     }
 
-    res.json({ message: 'Pickup point deleted successfully' });
+    const { id } = req.params;
+    if (!isValidObjectId(id)) throw createError("معرف نقطة الاستلام غير صالح", 400);
+
+    const deletedPickupPoint = await PickupPoint.findByIdAndDelete(id);
+    if (!deletedPickupPoint) throw createError("نقطة الاستلام غير موجودة", 404);
+
+    res.status(200).json({ status: "success", message: 'تم حذف نقطة الاستلام بنجاح' });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    next(error);
   }
 };

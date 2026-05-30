@@ -1,5 +1,5 @@
 import express from 'express';
-import { register, login, verifyEmail, getUserProfile, forgetPassword, verifyResetCode, resetPassword, updateProfile, getSellerBalance, getSellerForAdmin, getUsersForAdmin, searchUsersForAdmin, searchUsers, resendVerification, changeUserPassword, getMe, refreshToken, logout, updateVendorBalanceByAdmin, updateVendorStatusByAdmin, toggleUserActiveStatus, permanentlyDeleteUser } from '../controllers/user.controller.js';
+import { register, login, verifyEmail, forgetPassword, verifyResetCode, resetPassword, updateProfile, getSellerBalance, getSellerForAdmin, getUsersForAdmin, searchUsersForAdmin, searchUsers, resendVerification, changeUserPassword, getMe, refreshToken, logout, updateVendorBalanceByAdmin, updateVendorStatusByAdmin, toggleUserActiveStatus, permanentlyDeleteUser } from '../controllers/user.controller.js';
 import { getSellerOrders } from '../controllers/order.controller.js';
 import { protect, isSeller, isAdmin } from '../middlewares/auth.js';
 import { registerUserValid } from '../validations/user/registerUserValid.js'
@@ -24,10 +24,9 @@ router.post('/verify-email', verifyEmailValid, verifyEmail);
 router.post('/forgot-password', forgotPasswordValid, forgetPassword);
 router.post('/verify-reset-code', verifyResetCodeValid, verifyResetCode);
 router.post('/reset-password', resetPasswordValid, resetPassword);
-router.post('/resend', resendValid, resendVerification);
+router.post('/resend-email', resendValid, resendVerification);
 
 router.use(protect);
-router.get('/profile', getUserProfile);
 router.get('/me', getMe);
 router.patch('/profile', updateUserValid,updateProfile);
 router.patch('/change-password', changePasswordValid,changeUserPassword);

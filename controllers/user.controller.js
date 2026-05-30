@@ -1,49 +1,52 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import User from '../models/user.model.js';
-import Order from '../models/order.model.js';
+import mongoose from 'mongoose';
 import crypto from 'crypto';
+import User from '../models/user.model.js';
 import sendEmail from '../middlewares/email.middleware.js';
 import createError from '../utils/error.js';
 import { createNotifications } from '../utils/notification.js';
 
-export const searchUsers = async (req, res) => {
+// ==========================================
+// 🛠 HELPER FUNCTIONS
+// ==========================================
+const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+
+// ==========================================
+// 🔍 SEARCH & LISTING
+// ==========================================
+export const searchUsers = async (req, res, next) => {
   try {
     let { q = "", role, page = 1, limit = 10 } = req.query;
 
-    // تنظيف الإدخالات
     q = q.trim();
-    page = parseInt(page);
-    limit = parseInt(limit);
+    page = Math.max(1, parseInt(page));
+    limit = Math.max(1, parseInt(limit));
 
-    // تحقق من وجود كلمة البحث
-    if (!q) {
-      return res.status(400).json({
-        success: false,
-        message: "كلمة البحث مطلوبة",
-      });
+    const searchFilter = {};
+
+    if (q) {
+      // Prevent ReDoS by escaping regex characters
+      const safeQuery = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      searchFilter.$or = [
+        { firstName: { $regex: safeQuery, $options: 'i' } },
+        { lastName: { $regex: safeQuery, $options: 'i' } },
+        { email: { $regex: safeQuery, $options: 'i' } },
+        { phone: { $regex: safeQuery, $options: 'i' } }
+      ];
     }
 
-    const searchFilter = {
-      $text: { $search: q }
-    };
-
-    // role filter
-    if (role && ["user", "seller"].includes(role)) {
+    if (role && ["user", "seller", "admin"].includes(role)) {
       searchFilter.role = role;
     }
 
-
-
-    // حساب العدد الكلي (لـ pagination)
     const total = await User.countDocuments(searchFilter);
-
-    // البحث بالصفحات مع تحديد البيانات المطلوبة فقط
     const users = await User.find(searchFilter)
-      .select("_id firstName lastName email phone role isActive createdAt")
+      .select("_id firstName lastName email phone role isActive isVerified createdAt")
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
-      .limit(limit);
+      .limit(limit)
+      .lean();
 
     res.status(200).json({
       success: true,
@@ -56,37 +59,29 @@ export const searchUsers = async (req, res) => {
     });
   } catch (error) {
     console.error("Error searching users:", error);
-    res.status(500).json({
-      success: false,
-      message: "حدث خطأ أثناء البحث",
-      error: error.message,
-    });
+    next(new createError("حدث خطأ أثناء البحث", 500));
   }
 };
 
-// دالة بديلة للبحث مع فلتر إضافي
-export const searchUsersForAdmin = async (req, res) => {
+export const searchUsersForAdmin = async (req, res, next) => {
   try {
     const { q, role, isActive } = req.query;
-
     const searchFilter = {};
 
-    // فلتر البحث
     if (q && q.trim() !== "") {
+      const safeQuery = q.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       searchFilter.$or = [
-        { firstName: { $regex: q, $options: 'i' } },
-        { lastName: { $regex: q, $options: 'i' } },
-        { email: { $regex: q, $options: 'i' } },
-        { phone: { $regex: q, $options: 'i' } }
+        { firstName: { $regex: safeQuery, $options: 'i' } },
+        { lastName: { $regex: safeQuery, $options: 'i' } },
+        { email: { $regex: safeQuery, $options: 'i' } },
+        { phone: { $regex: safeQuery, $options: 'i' } }
       ];
     }
 
-    // فلتر الدور
-    if (role && ['user', 'seller'].includes(role)) {
+    if (role && ['user', 'seller', 'admin'].includes(role)) {
       searchFilter.role = role;
     }
 
-    // فلتر الحالة النشطة
     if (isActive !== undefined) {
       searchFilter.isActive = isActive === 'true';
     }
@@ -94,73 +89,306 @@ export const searchUsersForAdmin = async (req, res) => {
     const users = await User.find(searchFilter)
       .select('_id firstName lastName email phone role isActive createdAt')
       .limit(100)
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
     res.status(200).json({
       success: true,
       data: users,
       count: users.length
     });
-
   } catch (error) {
     console.error('Error in searchUsersForAdmin:', error);
-    res.status(500).json({
-      success: false,
-      message: 'فشل في البحث',
-      error: error.message
-    });
+    next(new createError("فشل في البحث", 500));
   }
 };
 
-// Password reset functionality
-export const forgetPassword = async (req, res) => {
+export const getSellerForAdmin = async (req, res, next) => {
   try {
-    const { email } = req.body;
+    const seller = await User.find({ role: 'seller' }).lean();
+    res.status(200).json(seller);
+  } catch (error) {
+    next(new createError(error.message, 500));
+  }
+};
 
-    // Find user by email
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({ message: 'لم نتمكن من العثور على حساب بهذا البريد الإلكتروني' });
-    }
+export const getUsersForAdmin = async (req, res, next) => {
+  try {
+    const users = await User.find({ role: 'user' })
+      .select('firstName lastName email phone role isActive isVerified address createdAt updatedAt')
+      .lean();
+    res.status(200).json(users);
+  } catch (error) {
+    next(new createError(error.message, 500));
+  }
+};
 
-    // Generate verification code
+// ==========================================
+// 🔐 AUTHENTICATION & PASSWORD MANAGEMENT
+// ==========================================
+export const register = async (req, res, next) => {
+  try {
+    const { firstName, lastName, email, password, phone, address, role } = req.body;
+
+    const existingUser = await User.findOne({ email });
+    if (existingUser) return next(new createError("هذا البريد الإلكتروني مسجل مسبقاً", 400));
+
     const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-    const expirationTime = new Date();
-    expirationTime.setMinutes(expirationTime.getMinutes() + 5); // 5 minutes expiration
+    const hashedCode = await bcrypt.hash(verificationCode, 10);
 
-    // Update user with verification code
-    user.passwordResetCode = crypto
-      .createHmac("sha256", process.env.JWT_SECRET)
-      .update(verificationCode)
-      .digest("hex");;
-    user.passwordResetCodeExpiresAt = expirationTime;
-    user.passwordResetVerified = false;
+    const user = new User({
+      firstName, lastName, email, phone, password,
+      role: role || "user",
+      address,
+      verificationCode: hashedCode,
+      verificationCodeExpiresAt: Date.now() + 30 * 60 * 1000
+    });
+
     await user.save();
 
-    // Send email with verification code
-    const emailOptions = {
+    await sendEmail({
+      email,
+      subject: 'Verify Your Email - Mirvory',
+      html: `
+        <div style="font-family: Arial; max-width: 600px; margin: 0 auto; padding: 20px; text-align: right;">
+          <h2 style="color: #1976D2;">مرحباً بك في ميرفوري!</h2>
+          <p>شكراً لتسجيلك. لتفعيل حسابك، يرجى إدخال هذا الكود:</p>
+          <div style="font-size: 24px; font-weight: bold; background: #F5F5F5; padding: 20px; text-align: center; border-radius: 8px;">
+            ${verificationCode}
+          </div>
+          <p>الكود صالح لمدة 30 دقيقة.</p>
+        </div>
+      `
+    });
+
+    // 🔔 NOTIFICATION: Admin Alert for new registration
+    (async () => {
+      try {
+        const io = req.app.get("io");
+        const adminUsers = await User.find({ role: 'admin' }).select('_id');
+        await createNotifications({
+          io,
+          title: '✅ مستخدم جديد',
+          message: `تم تسجيل مستخدم جديد: ${firstName} ${lastName} (${email})`,
+          type: 'USER_REGISTERED',
+          actor: user._id,
+          userId: adminUsers.map(a => a._id.toString()),
+          data: { userId: user._id, email },
+          link: `/admin/users`,
+        });
+      } catch (err) {
+        console.error("Notification Error:", err);
+      }
+    })();
+
+    res.status(201).json({
+      success: true,
+      message: 'تم التسجيل بنجاح. تم إرسال كود التفعيل إلى بريدك الإلكتروني',
+      userId: user._id
+    });
+  } catch (error) {
+    console.error('Registration error:', error);
+    next(new createError("حدث خطأ أثناء التسجيل", 500));
+  }
+};
+
+export const login = async (req, res, next) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return next(new createError("البريد وكلمة المرور مطلوبة", 400));
+    console.log(password,'147ss')
+    const user = await User.findOne({ email }).select('+password');
+    if (!user) return next(new createError("بيانات الدخول غير صحيحة", 401));
+    console.log(user, '147sss')
+
+    // 🚨 SECURITY: Prevent login for suspended or unverified users
+    if (!user.isActive) return next(new createError("هذا الحساب موقوف، يرجى التواصل مع الإدارة", 403));
+    // if (!user.isVerified) return next(new createError("يرجى تفعيل بريدك الإلكتروني أولاً", 403));
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    console.log(isMatch, '147ssss')
+
+    if (!isMatch) return next(new createError("بيانات الدخول غير صحيحة", 401));
+
+    const token = jwt.sign(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRE || "1d" }
+    );
+
+    const refreshToken = jwt.sign(
+      { id: user._id },
+      process.env.REFRESH_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    res.cookie("accessToken", token, {
+      httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", maxAge: 24 * 60 * 60 * 1000
+    });
+
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", maxAge: 7 * 24 * 60 * 60 * 1000
+    });
+
+    res.status(200).json({ success: true, data: { user: { id: user._id, role: user.role } } });
+  } catch (error) {
+    console.log('Login Error ', error)
+    next(new createError(error.message, 500));
+  }
+};
+
+export const logout = async (req, res, next) => {
+  try {
+    res.cookie('token', '', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', expires: new Date(0) });
+    res.cookie('accessToken', '', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', expires: new Date(0) });
+    res.cookie('refreshToken', '', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', expires: new Date(0) });
+    res.cookie('role', '', { expires: new Date(0) });
+
+    res.status(200).json({ success: true, message: "تم تسجيل الخروج بنجاح" });
+  } catch (error) {
+    console.error("LOGOUT_ERROR:", error);
+    next(new createError("خطأ في الخادم", 500));
+  }
+};
+
+export const refreshToken = async (req, res, next) => {
+  try {
+    const refreshToken = req.cookies.refreshToken;
+    if (!refreshToken) return next(new createError("No refresh token", 401));
+
+    const decoded = jwt.verify(refreshToken, process.env.REFRESH_SECRET);
+    const user = await User.findById(decoded.id);
+    if (!user || !user.isActive) return next(new createError("المستخدم غير موجود أو موقوف", 401));
+
+    const newAccessToken = jwt.sign(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRE }
+    );
+
+    res.cookie("accessToken", newAccessToken, {
+      httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", maxAge: 24 * 60 * 60 * 1000
+    });
+
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    console.error(err);
+    next(new createError("Invalid refresh token", 401));
+  }
+};
+
+export const verifyEmail = async (req, res, next) => {
+  try {
+    const { email, code } = req.body;
+    const user = await User.findOne({ email });
+
+    if (!user) return next(new createError("المستخدم غير موجود", 404));
+    if (user.isVerified) return next(new createError("الحساب مفعل بالفعل", 400));
+    if (user.verificationCodeExpiresAt < Date.now()) return next(new createError("كود منتهي الصلاحية", 400));
+
+    const isValid = await bcrypt.compare(code, user.verificationCode);
+    if (!isValid) return next(new createError("كود التفعيل غير صحيح", 400));
+
+    user.isVerified = true;
+    user.verificationCode = undefined;
+    user.verificationCodeExpiresAt = undefined;
+    await user.save();
+
+    // 🔔 NOTIFICATION: Welcome User
+    (async () => {
+      try {
+        const io = req.app.get("io");
+        await createNotifications({
+          io,
+          title: '🎉 مرحباً بك في ميرفوري!',
+          message: 'تم تفعيل حسابك بنجاح. نتمنى لك تسوقاً ممتعاً.',
+          type: 'USER_VERIFIED',
+          actor: user._id,
+          userId: [user._id.toString()],
+          data: {},
+          link: '/',
+        });
+      } catch (err) {
+        console.error("Notification Error:", err);
+      }
+    })();
+
+    res.status(200).json({ success: true, message: 'تم تفعيل البريد الإلكتروني بنجاح' });
+  } catch (error) {
+    console.error('Verification error:', error);
+    next(new createError("حدث خطأ أثناء التفعيل", 500));
+  }
+};
+
+export const resendVerification = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    let user = email ? await User.findOne({ email }) : (req.user?._id ? await User.findById(req.user._id) : null);
+console.log(user,'123456s')
+    if (!user) return next(new createError("المستخدم غير موجود", 404));
+    if (user.isVerified) return next(new createError("البريد الإلكتروني مفعل بالفعل", 400));
+
+    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const hashedCode = await bcrypt.hash(verificationCode, 10);
+
+    user.verificationCode = hashedCode;
+    user.verificationCodeExpiresAt = Date.now() + 5 * 60 * 1000;
+    await user.save({ validateModifiedOnly: true });
+
+    await sendEmail({
+      email: user.email,
+      subject: 'تفعيل البريد الإلكتروني - Mirvory',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; text-align: right;">
+          <h2 style="color: #1976D2;">تفعيل البريد الإلكتروني</h2>
+          <p>مرحباً ${user.firstName}،</p>
+          <div style="font-size: 24px; font-weight: bold; background: #F5F5F5; padding: 20px; text-align: center; border-radius: 8px;">
+            ${verificationCode}
+          </div>
+          <p>سيتم إلغاء صلاحية هذا الكود بعد 5 دقائق.</p>
+        </div>
+      `
+    });
+
+    res.status(200).json({ success: true, message: 'تم إرسال كود التفعيل إلى بريدك الإلكتروني' });
+  } catch (error) {
+    console.error('Resend verification error:', error);
+    next(new createError("حدث خطأ أثناء إرسال كود التفعيل", 500));
+  }
+};
+
+export const forgetPassword = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    if (!email) return next(new createError("البريد الإلكتروني مطلوب", 400));
+
+    const user = await User.findOne({ email });
+    if (!user) return next(new createError("لم نتمكن من العثور على حساب بهذا البريد", 404));
+
+    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const hashedCode = crypto.createHmac("sha256", process.env.JWT_SECRET).update(verificationCode).digest("hex");
+
+    user.passwordResetCode = hashedCode;
+    user.passwordResetCodeExpiresAt = Date.now() + 5 * 60 * 1000;
+    await user.save({ validateModifiedOnly: true });
+
+    await sendEmail({
       email,
       subject: 'طلب إعادة تعيين كلمة المرور - Mirvory',
       html: `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; text-align: right;">
-                    <h2 style="color: #1976D2;">طلب إعادة تعيين كلمة المرور</h2>
-                    <p>مرحباً ${user.firstName}،</p>
-                    <p>لقد طلبت إعادة تعيين كلمة المرور. استخدم الكود التالي لإعادة تعيين كلمة المرور:</p>
-                    <div style="font-size: 24px; font-weight: bold; background: #F5F5F5; padding: 20px; text-align: center; border-radius: 8px;">
-                        ${verificationCode}
-                    </div>
-                    <p>سيتم إلغاء صلاحية هذا الكود بعد 5 دقائق.</p>
-                    <p>إذا لم تقم بطلب إعادة تعيين كلمة المرور، يرجى تجاهل هذا البريد.</p>
-                </div>
-            `
-    };
+        <div style="font-family: Arial, sans-serif; text-align: right;">
+            <h2>طلب إعادة تعيين كلمة المرور</h2>
+            <p>مرحباً ${user.firstName}،</p>
+            <div style="font-size: 24px; font-weight: bold; padding: 20px;">${verificationCode}</div>
+            <p>صالح لمدة 5 دقائق.</p>
+        </div>
+      `
+    });
 
-    await sendEmail(emailOptions);
-
-    res.status(200).json({ message: 'تم إرسال كود التحقق إلى بريدك الإلكتروني' });
+    res.status(200).json({ success: true, message: 'تم إرسال كود التحقق إلى بريدك الإلكتروني' });
   } catch (error) {
     console.error('Password reset error:', error);
-    res.status(500).json({ message: 'حدث خطأ أثناء معالجة طلب إعادة تعيين كلمة المرور' });
+    next(new createError('حدث خطأ أثناء المعالجة', 500));
   }
 };
 
@@ -180,7 +408,7 @@ export const verifyResetCode = async (req, res, next) => {
       passwordResetCodeExpiresAt: { $gt: Date.now() }
     });
     if (!user) {
-      return next(createError("Invalid or expired reset code, please try again", 403));
+      return next(new createError("Invalid or expired reset code, please try again", 403));
     }
 
     user.passwordResetVerified = true;
@@ -193,8 +421,8 @@ export const verifyResetCode = async (req, res, next) => {
     res.status(500).json({ message: 'حدث خطأ أثناء التسجيل' });
   };
 }
+
 export const resetPassword = async (req, res, next) => {
-  // Retrieve user by email from req.body (user is not authenticated in a reset flow)
   const user = await User.findOne({ email: req.body.email });
   if (!user) {
     return next(new createError('Please Enter Email ', 404))
@@ -217,239 +445,60 @@ export const resetPassword = async (req, res, next) => {
   res.status(200).json({ data: user, userToken: token });
 };
 
-export const register = async (req, res) => {
+export const changeUserPassword = async (req, res, next) => {
   try {
-    const { firstName, lastName, email, password, phone, address, role } = req.body;
-    console.log(address,'ddddddddssss')
-    // Check if user already exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ message: 'هذا البريد الإلكتروني مسجل مسبقاً' });
-    }
+    const { currentPassword, newPassword } = req.body;
 
-    // Generate verification code
-    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-    const expirationTime = new Date();
-    expirationTime.setMinutes(expirationTime.getMinutes() + 30);
+    const user = await User.findById(req.user.id).select('+password');
+    if (!user) return next(new createError("المستخدم غير موجود", 404));
 
-    const hashedCode = await bcrypt.hash(verificationCode, 10);
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) return next(new createError("كلمة المرور الحالية غير صحيحة", 400));
 
-    // Create new user
-    const user = new User({
-      firstName,
-      lastName,
-      email,
-      phone,
-      password,
-      role: role || "user",  
-      address,
-      verificationCode: hashedCode,
-      verificationCodeExpiresAt: expirationTime
-    });
+    const isSame = await bcrypt.compare(newPassword, user.password);
+    if (isSame) return next(new createError("يجب أن تكون كلمة المرور جديدة ومختلفة", 400));
+
+    user.password = newPassword;
+    user.passwordChangeAt = Date.now();
     await user.save();
 
-    // Send verification email (NORMAL)
-    await sendEmail({
-      email,
-      subject: 'Verify Your Email - Mirvory',
-      html: `
-        <div style="font-family: Arial; max-width: 600px; margin: 0 auto; padding: 20px; text-align: right;">
-          <h2 style="color: #1976D2;">مرحباً بك في ميرفوري!</h2>
-          <p>شكراً لتسجيلك. لتفعيل حسابك، يرجى إدخال هذا الكود:</p>
-          <div style="font-size: 24px; font-weight: bold; background: #F5F5F5; padding: 20px; text-align: center; border-radius: 8px;">
-            ${verificationCode}
-          </div>
-          <p>الكود صالح لمدة 30 دقيقة.</p>
-        </div>
-      `
-    });
-
-    // ================================
-    // 🔥 FIRE & FORGET NOTIFICATIONS
-    // ================================
-    (async () => {
-      try {
-        const io = req.app.get("io");
-        const adminUsers = await User.find({ role: 'admin' });
-
-        await createNotifications({
-          io,
-          title: '✅ تم تسجيل مستخدم جديد',
-          message: `تم تسجيل مستخدم جديد: ${firstName} ${lastName} (${email})`,
-          type: 'NEW_REGISTRATION',
-          actor: user._id,
-          userIds: adminUsers.map(a => a._id.toString()),
-          data: { userId: user._id, email },
-          link: `/admin/users`,
-        });
-      } catch (err) {
-        console.error("Notification Error:", err);
-      }
-    })();
-    // ============== END FIRE & FORGET ==============
-
-    res.status(201).json({
-      message: 'تم التسجيل بنجاح. تم إرسال كود التفعيل إلى بريدك الإلكتروني',
-      userId: user._id
-    });
-
+    res.status(200).json({ success: true, message: 'تم تغيير كلمة المرور بنجاح' });
   } catch (error) {
-    console.error('Registration error:', error);
-    res.status(500).json({ message: 'حدث خطأ أثناء التسجيل' });
+    console.error('Change password error:', error);
+    next(new createError("خطأ في الخادم", 500));
   }
 };
 
-export const login = async (req, res) => {
+// ==========================================
+// 👤 USER PROFILE & DATA
+// ==========================================
+export const getMe = async (req, res, next) => {
   try {
-    const { email, password } = req.body;
+    if (!req.user?.id) return next(new createError("غير مصرح", 401));
 
-    if (!email || !password) {
-      return res.status(400).json({ message: 'Email and password are required' });
-    }
+    const user = await User.findById(req.user.id).select("-password -verificationCode -passwordResetCode").lean();
+    if (!user) return next(new createError("المستخدم غير موجود", 404));
 
-    const user = await User.findOne({ email }).select('+password');
-
-    if (!user) {
-      return res.status(401).json({ message: 'Invalid credentials' });
-    }
-
-    const isMatch = await bcrypt.compare(password, user.password);
-
-    if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid credentials' });
-    }
-
-    // ✅ IMPORTANT: fix payload
-    const token = jwt.sign(
-      { id: user._id, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRE }
-    );
-
-    // ✅ THE FIX: set cookie
-    res.cookie("accessToken", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
-    return res.status(200).json({
-      success: true,
-      data: {
-        user: { id: user._id, role: user.role }
-      }
-    });
-
+    res.status(200).json({ success: true, data: user });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error("GET_ME_ERROR:", error);
+    next(new createError("خطأ في الخادم", 500));
   }
 };
 
-export const verifyEmail = async (req, res) => {
+export const updateProfile = async (req, res, next) => {
   try {
-    console.log(req.body)
-    const { email, code } = req.body;
+    const { firstName, lastName, phone } = req.body;
 
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({ message: 'المستخدم غير موجود' });
-    }
+    const user = await User.findById(req.user.id);
+    if (!user) return next(new createError("المستخدم غير موجود", 404));
 
-    // Check if verification code has expired
-    if (user.verificationCodeExpiresAt < new Date()) {
-      return res.status(400).json({ message: 'انتهت صلاحية كود التفعيل' });
-    }
+    if (firstName) user.firstName = firstName;
+    if (lastName) user.lastName = lastName;
+    if (phone) user.phone = phone;
 
-    // Verify the code
-    const isValid = await bcrypt.compare(code, user.verificationCode);
-    if (!isValid) {
-      return res.status(400).json({ message: 'كود التفعيل غير صحيح' });
-    }
-
-    // Update user as verified
-    await User.updateOne(
-      { email },
-      {
-        $set: {
-          isVerified: true,
-          verificationCode: null,
-          verificationCodeExpiresAt: null
-        }
-      }
-    );
-
-    res.status(200).json({ message: 'تم تفعيل البريد الإلكتروني بنجاح' });
-  } catch (error) {
-    console.error('Verification error:', error);
-    res.status(500).json({ message: 'حدث خطأ أثناء التفعيل' });
-  }
-};
-
-export const getUserProfile = async (req, res) => {
-  try {
-    const user = await User.findById(req.user._id);
-    console.log(user,'45454')
-    res.json(user);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-export const getSellerForAdmin = async (req, res) => {
-  try {
-
-    const seller = await User.find({ role: 'seller' })
-
-    res.json(seller);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-export const getUsersForAdmin = async (req, res) => {
-  try {
-    const users = await User.find({ role: 'user' })
-      .select(`
-        firstName
-        lastName
-        email
-        phone
-        role
-        isActive
-        isVerified
-        address
-        createdAt
-        updatedAt
-      `);
-
-    res.status(200).json(users);
-
-  } catch (error) {
-    res.status(500).json({
-      message: error.message
-    });
-  }
-};
-export const updateProfile = async (req, res) => {
-  try {
-    const { firstName, lastName, phone, addresses } = req.body;
-    const userId = req.user._id; // Get user ID from authenticated request
-
-    // Find user by ID
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({ message: 'المستخدم غير موجود' });
-    }
-
-    // Update user fields
-    user.firstName = firstName || user.firstName;
-    user.lastName = lastName || user.lastName;
-    user.phone = phone || user.phone;
-
-    // Save updated user
     const updatedUser = await user.save();
 
-    // Return updated user data (excluding sensitive fields)
     const userData = {
       _id: updatedUser._id,
       firstName: updatedUser.firstName,
@@ -461,49 +510,24 @@ export const updateProfile = async (req, res) => {
       createdAt: updatedUser.createdAt
     };
 
-    res.status(200).json({
-      message: 'تم تحديث الملف الشخصي بنجاح',
-      user: userData
-    });
+    res.status(200).json({ success: true, message: 'تم تحديث الملف الشخصي بنجاح', user: userData });
   } catch (error) {
     console.error('Update profile error:', error);
-    res.status(500).json({ message: 'حدث خطأ أثناء تحديث الملف الشخصي' });
+    next(new createError("حدث خطأ أثناء تحديث الملف الشخصي", 500));
   }
 };
 
-//// seller funciton 
-// get seller wallet
-// Add this to your user controller file
-export const getSellerBalance = async (req, res) => {
+export const getSellerBalance = async (req, res, next) => {
   try {
-    // Get the authenticated user's ID from the request
     const userId = req.user._id;
 
-    // Find the user and explicitly select wallet fields
-    const user = await User.findById(userId)
-      .select('+wallet +role') // Force include wallet and role
-      .lean(); // Convert to plain JS object
+    const user = await User.findById(userId).select('+wallet +role').lean();
+    if (!user) return next(new createError("المستخدم غير موجود", 404));
 
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
+    if (user.role !== 'seller') return next(new createError("فقط البائعين يمكنهم الوصول لبيانات الرصيد", 403));
 
-    // Check if the user is a seller (note your schema uses 'vendor')
-    if (user.role !== 'seller') {
-      return res.status(403).json({
-        message: 'Only vendors can access balance information'
-      });
-    }
+    const wallet = user.wallet || { balance: 0, pendingBalance: 0, currency: 'EGP', lastTransaction: null };
 
-    // Ensure wallet exists (initialize if missing)
-    const wallet = user.wallet || {
-      balance: 0,
-      pendingBalance: 0,
-      currency: 'USD',
-      lastTransaction: null
-    };
-
-    // Return the wallet information
     res.status(200).json({
       success: true,
       data: {
@@ -511,391 +535,165 @@ export const getSellerBalance = async (req, res) => {
         pendingBalance: wallet.pendingBalance,
         currency: wallet.currency,
         lastTransaction: wallet.lastTransaction,
-        vendorProfile: user.vendorProfile // Include vendor profile if needed
+        vendorProfile: user.vendorProfile
       }
     });
-
   } catch (error) {
     console.error('Error getting seller balance:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error retrieving seller balance',
-      error: error.message
-    });
+    next(new createError("حدث خطأ أثناء جلب الرصيد", 500));
   }
 };
 
-//resend email verification 
-export const resendVerification = async (req, res) => {
+// ==========================================
+// 🛡 ADMIN / SUPER ADMIN CONTROLS
+// ==========================================
+export const updateVendorBalanceByAdmin = async (req, res, next) => {
   try {
-    const { email } = req.body; // Get email from request body for frontend
-
-    console.log('Resend verification request for email:', email);
-
-    // Find user by email (for frontend) or by ID (for authenticated users)
-    let user;
-    if (email) {
-      // For frontend - user is not logged in yet
-      user = await User.findOne({ email });
-    } else if (req.user?._id) {
-      // For authenticated users
-      user = await User.findById(req.user._id);
-    } else {
-      return res.status(400).json({ message: 'البريد الإلكتروني مطلوب' });
-    }
-
-    if (!user) {
-      return res.status(404).json({ message: 'المستخدم غير موجود' });
-    }
-
-    if (user.isVerified) {
-      return res.status(400).json({ message: 'البريد الإلكتروني مفعل بالفعل' });
-    }
-
-    // Generate new verification code
-    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-    const expirationTime = new Date();
-    expirationTime.setMinutes(expirationTime.getMinutes() + 5); // 5 minutes expiration
-
-    // Hash and save verification code
-    const hashedCode = await bcrypt.hash(verificationCode, 10);
-    user.verificationCode = hashedCode;
-    user.verificationCodeExpiresAt = expirationTime;
-    await user.save();
-
-    // Send verification email
-    const emailOptions = {
-      email: user.email,
-      subject: 'تفعيل البريد الإلكتروني - Mirvory',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; text-align: right;">
-          <h2 style="color: #1976D2;">تفعيل البريد الإلكتروني</h2>
-          <p>مرحباً ${user.firstName}،</p>
-          <p>استخدم الكود التالي لتفعيل بريدك الإلكتروني:</p>
-          <div style="font-size: 24px; font-weight: bold; background: #F5F5F5; padding: 20px; text-align: center; border-radius: 8px;">
-            ${verificationCode}
-          </div>
-          <p>سيتم إلغاء صلاحية هذا الكود بعد 5 دقائق.</p>
-        </div>
-      `
-    };
-
-    await sendEmail(emailOptions);
-
-    res.status(200).json({
-      success: true,
-      message: 'تم إرسال كود التفعيل إلى بريدك الإلكتروني'
-    });
-  } catch (error) {
-    console.error('Resend verification error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'حدث خطأ أثناء إرسال كود التفعيل'
-    });
-  }
-};
-
-export const changeUserPassword = async (req, res, next) => {
-  try {
-    const { currentPassword, newPassword } = req.body;
-
-    // 1) هات اليوزر بالباسورد
-    const user = await User.findById(req.user.id).select('+password');
-    if (!user) {
-      return next(new createError('User not found', 404));
-    }
-
-    // 2) تحقق من الباسورد الحالي
-    const isMatch = await bcrypt.compare(currentPassword, user.password);
-    if (!isMatch) {
-      return next(new createError('Current password is incorrect', 400));
-    }
-
-    // 3) امنع نفس الباسورد
-    const isSame = await bcrypt.compare(newPassword, user.password);
-    if (isSame) {
-      return next(new createError('New password must be different', 400));
-    }
-
-    // ✅ 4) هنا الحل الصح
-    user.password = newPassword; // سيب الـ schema يعمل hashing
-
-    user.passwordChangeAt = Date.now();
-
-    await user.save(); // هنا pre-save هيشتغل
-
-    // 5) رجّع response
-    res.status(200).json({
-      success: true,
-      message: 'Password changed successfully'
-    });
-
-  } catch (error) {
-    console.error('Change password error:', error);
-    return next(new createError('Internal server error', 500));
-  }
-};
-export const getMe = async (req, res, next) => {
-  try {
-    console.log('getme')
-    if (!req.user?.id) {
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized"
-      });
-    }
-
-    const user = await User.findById(req.user.id).select(
-      "-password -verificationCode -passwordResetCode"
-    );
-    console.log(user, 'jjddk')
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found"
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      data: user
-    });
-
-  } catch (error) {
-    console.error("GET_ME_ERROR:", error);
-    res.status(500).json({
-      success: false,
-      message: "Server error"
-    });
-  }
-};
-
-// Refresh token function
-export const refreshToken = async (req, res) => {
-  try {
-    console.log('refreshToken2025')
-    const refreshToken = req.cookies.refreshToken;
-
-    if (!refreshToken) {
-      return res.status(401).json({ message: "No refresh token" });
-    }
-
-    const decoded = jwt.verify(refreshToken, process.env.REFRESH_SECRET);
-
-    const user = await User.findById(decoded.id);
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    const newAccessToken = jwt.sign(
-      { id: user._id, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
-    res.cookie("accessToken", newAccessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax"
-    });
-
-    return res.json({ success: true });
-  } catch (err) {
-    console.error(err);
-    return res.status(401).json({ message: "Invalid refresh token" });
-  }
-};
-
-// Logout function
-export const logout = async (req, res) => {
-  try {
-    console.log('loggging out ')
-    // Clear all authentication cookies
-    res.cookie('token', '', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      expires: new Date(0)
-    });
-
-    res.cookie('accessToken', '', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      expires: new Date(0)
-    });
-
-    res.cookie('refreshToken', '', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      expires: new Date(0)
-    });
-
-    res.cookie('role', '', {
-      expires: new Date(0)
-    });
-
-    res.status(200).json({
-      success: true,
-      message: "Logged out successfully"
-    });
-
-  } catch (error) {
-    console.error("LOGOUT_ERROR:", error);
-    res.status(500).json({
-      success: false,
-      message: "Server error"
-    });
-  }
-};
-
-// 1. تعديل رصيد البائع الأساسي والمعلق (خاص بالسوبر أدمن)
-// تعديل رصيد البائع الأساسي والمعلق (حل مشكلة الـ Validation)
-export const updateVendorBalanceByAdmin = async (req, res) => {
-  try {
-    if (req.user.role !== 'super_admin') {
-      return res.status(403).json({ success: false, message: "هذه الصلاحية متاحة فقط للسوبر أدمن" });
-    }
+    if (req.user.role !== 'super_admin') return next(new createError("هذه الصلاحية متاحة فقط للسوبر أدمن", 403));
 
     const { sellerId, balance, pendingBalance } = req.body;
+    if (!isValidObjectId(sellerId)) return next(new createError("معرف البائع غير صالح", 400));
 
-    // بناء كائن التحديث ديناميكياً لتحديث القيم المرسلة فقط
-    const updateFields = {};
-    if (balance !== undefined) updateFields['wallet.balance'] = Number(balance);
-    if (pendingBalance !== undefined) updateFields['wallet.pendingBalance'] = Number(pendingBalance);
+    const seller = await User.findOne({ _id: sellerId, role: 'seller' });
+    if (!seller) return next(new createError("لم يتم العثور على البائع", 404));
 
-    if (Object.keys(updateFields).length === 0) {
-      return res.status(400).json({ success: false, message: "لم يتم إرسال قيم لتحديثها" });
-    }
+    if (balance !== undefined) seller.wallet.balance = Number(balance);
+    if (pendingBalance !== undefined) seller.wallet.pendingBalance = Number(pendingBalance);
 
-    // استخدام findByIdAndUpdate مع runValidators: false يتخطى أخطاء الـ Cast للحقول الأخرى
-    const updatedSeller = await User.findOneAndUpdate(
-      { _id: sellerId, role: 'seller' },
-      { $set: updateFields },
-      { new: true, runValidators: false } // runValidators: false يحل المشكلة تماماً
-    );
+    // Save with validateModifiedOnly to respect full validation rules safely
+    await seller.save({ validateModifiedOnly: true });
 
-    if (!updatedSeller) {
-      return res.status(404).json({ success: false, message: "لم يتم العثور على البائع" });
-    }
+    // 🔔 NOTIFICATION: Wallet Update for Seller
+    (async () => {
+      try {
+        const io = req.app.get("io");
+        await createNotifications({
+          io,
+          title: '💰 تحديث المحفظة',
+          message: 'تم تحديث رصيد محفظتك من قبل الإدارة.',
+          type: 'WALLET_UPDATED',
+          actor: req.user.id,
+          userId: [seller._id.toString()],
+          data: { balance: seller.wallet.balance },
+          link: '/seller/wallet',
+        });
+      } catch (err) {
+        console.error("Notification Error:", err);
+      }
+    })();
 
-    res.status(200).json({
-      success: true,
-      message: "تم تحديث الرصيد بنجاح",
-      data: updatedSeller.wallet
-    });
+    res.status(200).json({ success: true, message: "تم تحديث الرصيد بنجاح", data: seller.wallet });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    next(new createError(error.message, 500));
   }
 };
 
-// 2. توثيق حساب البائع وتغيير حالة القبول الإداري (approvalStatus & trustedSeller)
-export const updateVendorStatusByAdmin = async (req, res) => {
+export const updateVendorStatusByAdmin = async (req, res, next) => {
   try {
-    if (!['admin', 'super_admin'].includes(req.user.role)) {
-      return res.status(403).json({ success: false, message: "غير مسموح لك بإجراء هذا التعديل" });
-    }
+    if (!['admin', 'super_admin'].includes(req.user.role)) return next(new createError("غير مسموح لك بإجراء هذا التعديل", 403));
 
     const { sellerId, trustedSeller, approvalStatus } = req.body;
+    if (!isValidObjectId(sellerId)) return next(new createError("معرف البائع غير صالح", 400));
 
-    // بناء كائن التحديث ديناميكياً
-    const updateFields = {};
-    if (trustedSeller !== undefined) updateFields['vendorProfile.trustedSeller'] = trustedSeller;
-    if (approvalStatus !== undefined) updateFields['vendorProfile.approvalStatus'] = approvalStatus;
+    const seller = await User.findOne({ _id: sellerId, role: 'seller' });
+    if (!seller) return next(new createError("لم يتم العثور على البائع", 404));
 
-    if (Object.keys(updateFields).length === 0) {
-      return res.status(400).json({ success: false, message: "لم يتم إرسال قيم لتحديثها" });
-    }
+    if (trustedSeller !== undefined) seller.vendorProfile.trustedSeller = trustedSeller;
+    if (approvalStatus !== undefined) seller.vendorProfile.approvalStatus = approvalStatus;
 
-    // التحديث المباشر وتخطي التحقق من الحقول الأخرى (مثل الـ addresses)
-    const updatedSeller = await User.findOneAndUpdate(
-      { _id: sellerId, role: 'seller' },
-      { $set: updateFields },
-      { new: true, runValidators: false }
-    );
+    await seller.save({ validateModifiedOnly: true });
 
-    if (!updatedSeller) {
-      return res.status(404).json({ success: false, message: "لم يتم العثور على البائع" });
-    }
+    // 🔔 NOTIFICATION: Vendor Status Update
+    (async () => {
+      try {
+        const io = req.app.get("io");
+        const statusMsg = approvalStatus === 'approved'
+          ? 'تهانينا! تمت الموافقة على حساب البائع الخاص بك.'
+          : 'تم تحديث حالة حساب البائع الخاص بك بواسطة الإدارة.';
 
-    res.status(200).json({
-      success: true,
-      message: "تم تحديث حالة البائع بنجاح",
-      data: updatedSeller.vendorProfile
-    });
+        await createNotifications({
+          io,
+          title: '🏪 حالة المتجر',
+          message: statusMsg,
+          type: 'CUSTOM',
+          actor: req.user.id,
+          userId: [seller._id.toString()],
+          data: { approvalStatus },
+          link: '/seller/dashboard',
+        });
+      } catch (err) {
+        console.error("Notification Error:", err);
+      }
+    })();
+
+    res.status(200).json({ success: true, message: "تم تحديث حالة البائع بنجاح", data: seller.vendorProfile });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    next(new createError(error.message, 500));
   }
 };
-// 3. تعطيل أو تفعيل حساب البائع (isActive)
-export const toggleUserActiveStatus = async (req, res) => {
+
+export const toggleUserActiveStatus = async (req, res, next) => {
   try {
-    // 1. التحقق من الصلاحيات الإدارية
-    if (!['admin', 'super_admin'].includes(req.user.role)) {
-      return res.status(403).json({ success: false, message: "غير مسموح لك بإجراء هذا التعديل" });
-    }
+    if (!['admin', 'super_admin'].includes(req.user.role)) return next(new createError("غير مسموح لك بإجراء هذا التعديل", 403));
 
     const { userId, isActive } = req.body;
+    if (!isValidObjectId(userId)) return next(new createError("معرف المستخدم غير صالح", 400));
+    if (typeof isActive !== 'boolean') return next(new createError("حالة التفعيل غير محددة أو غير صالحة", 400));
 
-    if (isActive === undefined) {
-      return res.status(400).json({ success: false, message: "حالة التفعيل المطلوبة غير محددة" });
-    }
+    const user = await User.findById(userId);
+    if (!user) return next(new createError("المستخدم غير موجود", 404));
 
-    const updatedUser = await User.findByIdAndUpdate(
-      userId,
-      { $set: { isActive: isActive } },
-      {
-        new: true,
-        runValidators: false, 
-        validateModifiedOnly: false
+    user.isActive = isActive;
+    await user.save({ validateModifiedOnly: true });
+
+    // 🔔 NOTIFICATION: Account Suspension/Activation
+    (async () => {
+      try {
+        const io = req.app.get("io");
+        const msg = isActive ? 'تم إعادة تفعيل حسابك بنجاح.' : 'تم إيقاف حسابك مؤقتاً من قبل الإدارة لمخالفة الشروط.';
+        const type = isActive ? 'CUSTOM' : 'USER_SUSPENDED';
+
+        await createNotifications({
+          io,
+          title: isActive ? '✅ تفعيل الحساب' : '⛔ إيقاف الحساب',
+          message: msg,
+          type: type,
+          actor: req.user.id,
+          userId: [user._id.toString()],
+          data: { isActive },
+          link: '/',
+        });
+      } catch (err) {
+        console.error("Notification Error:", err);
       }
-    ).select("isActive");
+    })();
 
-    if (!updatedUser) {
-      return res.status(404).json({ success: false, message: "المستخدم غير موجود" });
-    }
-
-    res.status(200).json({
-      success: true,
-      message: updatedUser.isActive ? "تم تفعيل الحساب بنجاح" : "تم تعطيل الحساب بنجاح",
-      data: { isActive: updatedUser.isActive }
-    });
+    res.status(200).json({ success: true, message: isActive ? "تم تفعيل الحساب بنجاح" : "تم تعطيل الحساب بنجاح", data: { isActive: user.isActive } });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    next(new createError(error.message, 500));
   }
 };
 
-// الحذف النهائي والدائم للمستخدم أو البائع من قاعدة البيانات
-export const permanentlyDeleteUser = async (req, res) => {
+export const permanentlyDeleteUser = async (req, res, next) => {
   try {
-    // تأمين حرج: التأكد أن القائم بالإجراء هو السوبر أدمن فقط
     if (req.user.role !== 'super_admin') {
-      return res.status(403).json({
-        success: false,
-        message: "عذراً، صلاحية الحذف النهائي الدائم مقتصرة على السوبر أدمن فقط"
-      });
+      return next(new createError("عذراً، صلاحية الحذف النهائي مقتصرة على السوبر أدمن فقط", 403));
     }
 
-    const { userId } = req.body; // أو req.params حسب تصميم الـ routes لديك
+    const { userId } = req.body;
+    if (!isValidObjectId(userId)) return next(new createError("معرف المستخدم مطلوب وغير صالح", 400));
 
-    if (!userId) {
-      return res.status(400).json({ success: false, message: "معرف المستخدم مطلوب" });
-    }
+    // تم التحويل للحذف المنطقي Soft Delete لحماية استقرار قواعد البيانات المالية والتاريخية
+    const user = await User.findById(userId);
+    if (!user) return next(new createError("المستخدم غير موجود بالفعل", 404));
 
-    // تنفيذ الحذف الصارم والنهائي (Hard Delete)
-    const deletedUser = await User.findByIdAndDelete(userId);
+    user.isActive = false;
+    // user.isDeleted = true; // يمكن إضافة هذا الحقل للموديل مستقبلاً للمسح المنطقي النهائي
 
-    if (!deletedUser) {
-      return res.status(404).json({ success: false, message: "المستخدم غير موجود بالفعل أو تم حذفه مسبقاً" });
-    }
+    await user.save({ validateModifiedOnly: true });
 
-    res.status(200).json({
-      success: true,
-      message: "تم حذف الحساب والبيانات التابعة له نهائياً من قاعدة البيانات"
-    });
+    res.status(200).json({ success: true, message: "تم إيقاف الحساب منطقياً للحفاظ على سلامة النظام والفواتير المرتبطة" });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    next(new createError(error.message, 500));
   }
 };

@@ -33,7 +33,7 @@ router.get('/check/:productId', checkFavorite);
 // @route   POST /api/wishlist/toggle
 // @desc    Toggle product in wishlist
 // @access  Private
-router.post('/toggle', toggleWishlist);
+router.post('/toggle/:productId', toggleWishlist);
 
 // @route   DELETE /api/wishlist
 // @desc    Clear wishlist

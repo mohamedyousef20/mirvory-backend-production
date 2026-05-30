@@ -5,8 +5,6 @@ import {
     sendNotification,
     getUnreadCount,
     markAllAsRead,
-    searchUsers,
-    getNotificationCount
 } from '../controllers/notification.controller.js';
 import { isAdmin, protect } from '../middlewares/auth.js';
 
@@ -20,8 +18,7 @@ router.get('/', getNotifications);
 router.get('/unread-count', getUnreadCount);
 router.put('/read/:id', markAsRead);
 router.put('/read-all', markAllAsRead);
-router.get("/search", searchUsers);
-router.get("/count", getNotificationCount );
+router.get("/count", getUnreadCount );
 
 // Admin-only routes
 router.post('/', isAdmin, sendNotification);

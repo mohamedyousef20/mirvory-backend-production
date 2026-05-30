@@ -315,30 +315,15 @@ userSchema.methods.comparePassword = async function (candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };
 
-// Update vendor balance method
-userSchema.methods.updateVendorBalance = async function (amount, transactionType) {
-  if (this.role !== 'seller') {
-    throw new Error('Balance updates are only allowed for vendors');
+// Memory Leak Protection: Cap Login History
+userSchema.pre('save', function (next) {
+  if (this.loginHistory && this.loginHistory.length > 50) {
+    // Keep only the most recent 50 logins
+    this.loginHistory = this.loginHistory.slice(-50);
   }
+  next();
+});
 
-  if (transactionType === 'debit' && this.wallet.balance < amount) {
-    throw new Error('Insufficient funds');
-  }
-
-  const newBalance = transactionType === 'credit'
-    ? this.wallet.balance + amount
-    : this.wallet.balance - amount;
-
-  this.wallet.balance = newBalance;
-  this.wallet.lastTransaction = {
-    amount,
-    type: transactionType,
-    date: new Date()
-  };
-
-  await this.save();
-  return this.wallet.balance;
-};
 
 // Virtual for full name
 userSchema.virtual('fullName').get(function () {

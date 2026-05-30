@@ -12,7 +12,7 @@ router.use(protect);
 
 router.post('/complete',isAdmin, orderComplete); 
 router.get('/', getUserOrders);
-router.get('/admin/all', isAdmin, getAdminOrders);
+router.get("/admin/all", isAdmin, createOrderFilterObj,  getAdminOrders); 
 router.get('/seller', isSeller, createOrderFilterObj, getSellerOrders);
 router.get('/:id', getUserOrderById);
 router.get('/:id/invoice', printInvoice);

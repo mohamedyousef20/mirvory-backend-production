@@ -8,16 +8,16 @@ export const createNotifications = async ({
     message,
     type,
     actor = null,
-    userIds = [],
+    userId = [],
     role = null,
     data = {},
     link = "",
 }) => {
     let recipients = [];
 
-    if (userIds.length > 0) {
-        recipients = await User.find({ _id: { $in: userIds } }).select("_id role");
-        if (recipients.length !== userIds.length) {
+    if (userId.length > 0) {
+        recipients = await User.find({ _id: { $in: userId } }).select("_id role");
+        if (recipients.length !== userId.length) {
             throw new Error("Some users not found");
         }
     } else if (role) {
@@ -41,7 +41,9 @@ export const createNotifications = async ({
     const saved = await Notification.insertMany(docs);
 
     if (io) {
+        console.log('Emitting notifications to', saved.length, 'recipients');
         saved.forEach((notif) => {
+            console.log('Emitting to user room:', String(notif.user));
             io.to(String(notif.user)).emit("notification", {
                 _id: notif._id,
                 title: notif.title,
@@ -52,6 +54,8 @@ export const createNotifications = async ({
                 createdAt: notif.createdAt,
             });
         });
+    } else {
+        console.log('No io instance provided, notifications not emitted in real-time');
     }
 
     return saved;

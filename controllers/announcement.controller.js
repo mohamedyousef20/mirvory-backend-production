@@ -1,150 +1,82 @@
 import Announcement from '../models/announcement.model.js';
-import { v2 as cloudinary } from 'cloudinary';
-import { promisify } from 'util';
+import mongoose from 'mongoose';
+import createError from '../utils/error.js';
 
-// Convert callback-based cloudinary.uploader.upload to use promises
-const uploadToCloudinary = promisify(cloudinary.uploader.upload);
+const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
-export const createAnnouncement = async (req, res) => {
+export const createAnnouncement = async (req, res, next) => {
     try {
-        const { title, titleEn, content, contentEn, isMain, startDate, endDate, image } = req.body;
-        console.log(req.body, 'this is body from createAnnouncement **********************')
-        const announcement = new Announcement({
-            title,
-            titleEn,
-            content,
-            contentEn,
-            image,
-            isMain,
-            startDate,
-            endDate
-        });
+        if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw createError("مرفوض", 403);
 
-        // Allow multiple main announcements for carousel
-        // if (isMain) {
-        //     await Announcement.updateMany({ isMain: true }, { $set: { isMain: false } });
-        // }
+        const { title, titleEn, content, contentEn, isMain, startDate, endDate, image } = req.body;
+        const announcement = new Announcement({ title, titleEn, content, contentEn, image, isMain, startDate, endDate });
 
         await announcement.save();
-        res.status(201).json(announcement);
-    } catch (error) {
-        console.error("Error creating announcement:", error);
-        res.status(500).json({ message: error.message });
-    }
+        res.status(201).json({ status: "success", data: announcement });
+    } catch (error) { next(error); }
 };
 
-export const getAnnouncements = async (req, res) => {
+export const getAnnouncements = async (req, res, next) => {
     try {
-        const announcements = await Announcement.find({ status: 'active', isMain: false })
-            .sort({ createdAt: -1 });
-        console.log(announcements,';;;;')
+        const announcements = await Announcement.find({ status: 'active', isMain: false }).sort({ createdAt: -1 }).lean();
         res.json(announcements);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+    } catch (error) { next(error); }
 };
-export const getAnnouncementsForAdmin = async (req, res) => {
+
+export const getAnnouncementsForAdmin = async (req, res, next) => {
     try {
-        const announcements = await Announcement.find()
-            .sort({ createdAt: -1 });
+        if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw createError("مرفوض", 403);
+        const announcements = await Announcement.find().sort({ createdAt: -1 }).lean();
         res.json(announcements);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+    } catch (error) { next(error); }
 };
-export const getMainAnnouncement = async (req, res) => {
+
+export const getMainAnnouncement = async (req, res, next) => {
     try {
         const announcements = await Announcement.find({
-            isMain: true,
-            status: 'active',
-            startDate: { $lte: new Date() },
-            endDate: { $gte: new Date() }
-        }).sort({ createdAt: -1 });
+            isMain: true, status: 'active', startDate: { $lte: new Date() }, endDate: { $gte: new Date() }
+        }).sort({ createdAt: -1 }).lean();
 
-        console.log(announcements, 'Found announcements:')
-
-        // Check if the array is empty
-        if (announcements.length === 0) {
-            return res.status(404).json({ message: 'No active main announcement found' });
-        }
-
+        if (announcements.length === 0) return res.status(404).json({ message: 'لا يوجد إعلان رئيسي نشط' });
         res.json(announcements);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+    } catch (error) { next(error); }
 };
 
-
-
-export const getAnnouncementById = async (req, res) => {
+export const getAnnouncementById = async (req, res, next) => {
     try {
-        const announcement = await Announcement.findById(req.params.id);
+        const { id } = req.params;
+        if (!isValidObjectId(id)) throw createError("المعرف غير صالح", 400);
 
-        if (!announcement) {
-            return res.status(404).json({ message: 'Announcement not found' });
-        }
-
+        const announcement = await Announcement.findById(id).lean();
+        if (!announcement) throw createError('الإعلان غير موجود', 404);
         res.json(announcement);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+    } catch (error) { next(error); }
 };
 
-export const updateAnnouncement = async (req, res) => {
+export const updateAnnouncement = async (req, res, next) => {
     try {
+        if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw createError("مرفوض", 403);
+
         const { id } = req.params;
-        const { title, titleEn, content, contentEn, isMain, startDate, endDate, status, image } = req.body;
+        if (!isValidObjectId(id)) throw createError("المعرف غير صالح", 400);
 
-        console.log('Update request body:', req.body);
-        console.log('Update request file:', req.file);
+        const updateData = { ...req.body, updatedAt: new Date() };
+        const updatedAnnouncement = await Announcement.findByIdAndUpdate(id, updateData, { new: true, runValidators: true });
 
-        const updateData = {
-            ...(title && { title }),
-            ...(titleEn && { titleEn }),
-            ...(content && { content }),
-            ...(contentEn && { contentEn }),
-            ...(image && { image }),
-            ...(isMain && { isMain }),
-            ...(startDate && { startDate }),
-            ...(endDate && { endDate }),
-            ...(status && { status }),
-            updatedAt: new Date()
-        };
-        // Allow multiple main announcements for carousel
-        // if (isMain === 'true') {
-        //     await Announcement.updateMany(
-        //         { isMain: true, _id: { $ne: id } },
-        //         { $set: { isMain: false } }
-        //     );
-        // }
-
-        const updatedAnnouncement = await Announcement.findByIdAndUpdate(
-            id,
-            updateData,
-            { new: true }
-        );
-
-        if (!updatedAnnouncement) {
-            return res.status(404).json({ message: 'Announcement not found' });
-        }
-
-        res.json(updatedAnnouncement);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+        if (!updatedAnnouncement) throw createError('الإعلان غير موجود', 404);
+        res.json({ status: "success", data: updatedAnnouncement });
+    } catch (error) { next(error); }
 };
 
-export const deleteAnnouncement = async (req, res) => {
+export const deleteAnnouncement = async (req, res, next) => {
     try {
+        if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw createError("مرفوض", 403);
+
         const { id } = req.params;
-        const deletedAnnouncement = await Announcement.findByIdAndDelete(id);
+        if (!isValidObjectId(id)) throw createError("المعرف غير صالح", 400);
 
-        if (!deletedAnnouncement) {
-            return res.status(404).json({ message: 'Announcement not found' });
-        }
-
-        res.json({ message: 'Announcement deleted successfully' });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+        const deleted = await Announcement.findByIdAndDelete(id);
+        if (!deleted) throw createError('الإعلان غير موجود', 404);
+        res.json({ success: true, message: 'تم الحذف بنجاح' });
+    } catch (error) { next(error); }
 };

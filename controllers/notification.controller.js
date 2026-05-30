@@ -1,202 +1,87 @@
-import expressAsyncHandler from 'express-async-handler';
 import Notification from '../models/notification.model.js';
 import User from '../models/user.model.js';
+import mongoose from 'mongoose';
+import createError from '../utils/error.js';
+import { createNotifications } from '../utils/notification.js';
 
+const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
-// Get all notifications for the logged-in user
-export const getNotifications = async (req, res) => {
+export const getNotifications = async (req, res, next) => {
   try {
     const userId = req.user._id;
     const role = req.user.role;
 
     const notifications = await Notification.find({
-      $or: [
-        { userId },
-        { role },
-        { type: 'ALL_USERS' },
-      ],
-    }).sort({ createdAt: -1 });
+      $or: [{ userId }, { role }, { type: 'ALL_USERS' }],
+    }).sort({ createdAt: -1 }).lean();
 
     res.json({ success: true, notifications });
-  } catch (error) {
-    console.error('Error fetching notifications:', error);
-    res.status(500).json({ message: 'فشل في جلب الإشعارات' });
-  }
+  } catch (error) { next(error); }
 };
 
-// Mark a specific notification as read
-export const markAsRead = async (req, res) => {
+export const markAsRead = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) throw createError("المعرف غير صالح", 400);
 
     const notification = await Notification.findByIdAndUpdate(
       id,
       { seen: true, deleteAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000) },
       { new: true }
     );
-
-    if (!notification) return res.status(404).json({ message: 'الإشعار غير موجود' });
-
+    if (!notification) throw createError('الإشعار غير موجود', 404);
     res.json({ success: true, notification });
-  } catch (error) {
-    console.error('Error marking notification as read:', error);
-    res.status(500).json({ message: 'فشل في تحديث حالة الإشعار' });
-  }
+  } catch (error) { next(error); }
 };
 
-// Mark all notifications as read
-export const markAllAsRead = async (req, res) => {
+export const markAllAsRead = async (req, res, next) => {
   try {
-    const userId = req.user._id;
-
     const result = await Notification.updateMany(
-      { userId, seen: false },
-      {
-        $set: {
-          seen: true,
-          deleteAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
-        },
-      }
+      { userId: req.user._id, seen: false },
+      { $set: { seen: true, deleteAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000) } }
     );
-
-    res.json({
-      success: true,
-      message: 'تم تعليم جميع الإشعارات كمقروءة',
-      modifiedCount: result.modifiedCount,
-    });
-  } catch (error) {
-    console.error('Error marking all notifications as read:', error);
-    res.status(500).json({ message: 'فشل في تحديث الإشعارات' });
-  }
+    res.json({ success: true, message: 'تم تعليم الجميع كمقروء', modifiedCount: result.modifiedCount });
+  } catch (error) { next(error); }
 };
 
-// Get unread notifications count
-export const getUnreadCount = async (req, res) => {
+export const getUnreadCount = async (req, res, next) => {
   try {
-    const userId = req.user._id;
-    const role = req.user.role;
-
     const count = await Notification.countDocuments({
-      $or: [
-        { userId, seen: false },
-        { role, seen: false },
-        { type: 'ALL_USERS', seen: false },
-      ],
+      $or: [{ userId: req.user._id, seen: false }, { role: req.user.role, seen: false }, { type: 'ALL_USERS', seen: false }],
     });
-
     res.json({ success: true, count });
-  } catch (error) {
-    console.error('Error getting unread count:', error);
-    res.status(500).json({ message: 'فشل في جلب عدد الإشعارات غير المقروءة' });
-  }
+  } catch (error) { next(error); }
 };
 
-
-export const searchUsers = async (req, res) => {
+export const sendNotification = async (req, res, next) => {
   try {
-    const { q, role } = req.query;
+    // 🚨 أمان: الإدارة فقط ترسل إشعارات يدوية
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw createError("مرفوض", 403);
 
-    if (!q || q.trim() === "") {
-      return res.status(400).json({ message: 'كلمة البحث مطلوبة' });
-    }
+    const { title, message, type, userId = [], role, orderId } = req.body;
+    if (!title || !message || !type) throw createError('العنوان والرسالة ونوع الإشعار مطلوبة', 400);
 
-    const searchFilter = {
-      $or: [
-        { firstName: { $regex: q, $options: 'i' } },
-        { lastName: { $regex: q, $options: 'i' } },
-        { email: { $regex: q, $options: 'i' } },
-        { phone: { $regex: q, $options: 'i' } }
-      ]
-    };
+    const io = req.app.get("io");
 
-    // Add role filter if specified
-    if (role && ['user', 'seller'].includes(role)) {
-      searchFilter.role = role;
-    }
-
-    const users = await User.find(searchFilter)
-      .select('_id firstName lastName email phone role')
-      .limit(20); // Limit results for performance
-
-    res.json(users);
-  } catch (error) {
-    console.error('Error searching users:', error);
-    res.status(500).json({
-      message: 'حدث خطأ أثناء البحث',
-      error: error.message,
-    });
-  }
-};
-
-// Send a new notification (updated to handle selected users)
-export const sendNotification = async (req, res) => {
-  try {
-    const { title, message, type, userIds = [], role, orderId } = req.body;
-
-    if (!title || !message || !type) {
-      return res.status(400).json({ message: 'العنوان والرسالة ونوع الإشعار مطلوبة' });
-    }
-
-    let targetUsers = [];
-
-    if (userIds.length > 0) {
-      // Specific users/sellers from search
-      targetUsers = await User.find({ _id: { $in: userIds } });
-
-      if (targetUsers.length !== userIds.length) {
-        return res.status(400).json({ message: 'بعض المستخدمين غير موجودين' });
-      }
+    // ✅ الاعتماد على المساعد (Helper) لضمان تشغيل الـ Sockets في الوقت الفعلي
+    if (userId && userId.length > 0) {
+      await createNotifications({
+        io, title, message, type, actor: req.user._id, userIds: userId, data: { orderId }, link: orderId ? `/orders/${orderId}` : '/'
+      });
     } else if (role) {
-      // All users by role (seller / user)
-      targetUsers = await User.find({ role });
-    }
-
-    const notifications = [];
-
-    if (targetUsers.length > 0) {
-      // Create notifications for each user
-      for (const user of targetUsers) {
-        notifications.push({
-          userId: user._id,
-          title,
-          message,
-          type,
-          role: user.role,
-          orderId,
-          seen: false,
+      const targetUsers = await User.find({ role }).select('_id').lean();
+      if (targetUsers.length > 0) {
+        await createNotifications({
+          io, title, message, type, actor: req.user._id, userIds: targetUsers.map(u => u._id.toString()), data: { orderId }
         });
       }
     } else {
-      // Broadcast notification
-      notifications.push({
-        title,
-        message,
-        type: 'ALL_USERS',
-        seen: false,
+      // إشعار عام للجميع
+      await createNotifications({
+        io, title, message, type: 'ALL_USERS', actor: req.user._id, userIds: [], data: {}
       });
     }
 
-    await Notification.insertMany(notifications);
-
-    res.status(201).json({
-      success: true,
-      message: 'تم إرسال الإشعارات بنجاح',
-      count: notifications.length,
-    });
-  } catch (error) {
-    console.error('Error sending notification:', error);
-    res.status(500).json({
-      message: 'حدث خطأ أثناء إرسال الإشعار',
-      error: error.message,
-    });
-  }
+    res.status(201).json({ success: true, message: 'تم بث الإشعار بنجاح' });
+  } catch (error) { next(error); }
 };
-export const getNotificationCount = expressAsyncHandler(async (req, res) => {
-  const count = await Notification.countDocuments({ userId: req.user._id });
-  console.log(count)
-
-  res.json({
-    success: true,
-    count
-  });
-});

@@ -1,293 +1,151 @@
-import Coupon from '../models/coupon.model.js'
-import Cart from '../models/cart.model.js'
+import Coupon from '../models/coupon.model.js';
+import Cart from '../models/cart.model.js';
+import Order from '../models/order.model.js';
+import createError from '../utils/error.js';
+import { createNotifications } from '../utils/notification.js';
+import User from '../models/user.model.js';
 
-// 🧾 Get all coupons
-export const getAllCoupons = async (req, res) => {
+export const getAllCoupons = async (req, res, next) => {
     try {
-        const coupons = await Coupon.find().sort('-createdAt');
-        res.send(coupons);
-    } catch (error) {
-        res.status(500).send('Error retrieving coupons: ' + error.message);
-    }
+        const coupons = await Coupon.find().sort('-createdAt').lean();
+        res.json(coupons);
+    } catch (error) { next(error); }
 };
 
-// 🔍 Get a single coupon
-export const getCouponById = async (req, res) => {
+export const getCouponById = async (req, res, next) => {
+    try {
+        const coupon = await Coupon.findById(req.params.id).lean();
+        if (!coupon) throw createError("كوبون غير موجود", 404);
+        res.json(coupon);
+    } catch (error) { next(error); }
+};
+
+export const createCoupon = async (req, res, next) => {
+    try {
+        const code = req.body.code.toUpperCase();
+        const existing = await Coupon.findOne({ code }).lean();
+        if (existing) throw createError("كود الخصم موجود مسبقاً", 400);
+
+        const coupon = new Coupon({ ...req.body, code });
+        await coupon.save();
+
+        // 🔔 NOTIFICATION: Coupon Created (broadcast to all users)
+        (async () => {
+            try {
+                const io = req.app.get("io");
+                const allUsers = await User.find({ isActive: true });
+
+                if (allUsers.length > 0) {
+                    await createNotifications({
+                        io,
+                        title: '🎉 كوبون جديد!',
+                        message: `كوبون جديد متاح الآن: ${code} - خصم ${coupon.discountType === 'percentage' ? coupon.discountValue + '%' : coupon.discountValue + ' جنيه'}`,
+                        type: 'COUPON_CREATED',
+                        actor: req.user._id,
+                        userId: allUsers.map(u => u._id.toString()),
+                        data: { couponId: coupon._id, code: coupon.code },
+                        link: '/coupons',
+                    });
+                }
+            } catch (err) {
+                console.error("Notification Error:", err);
+            }
+        })();
+
+        res.status(201).json(coupon);
+    } catch (error) { next(error); }
+};
+
+export const updateCoupon = async (req, res, next) => {
     try {
         const coupon = await Coupon.findById(req.params.id);
-        if (!coupon) return res.status(404).send('Coupon not found');
-        res.send(coupon);
-    } catch (error) {
-        res.status(500).send('Error retrieving coupon: ' + error.message);
-    }
-};
+        if (!coupon) throw createError("كوبون غير موجود", 404);
 
-// ➕ Create a new coupon
-export const createCoupon = async (req, res) => {
-    // const { error } = validateCoupon(req.body);
-    // if (error) return res.status(400).send(error.details[0].message);
-    console.log('im very smart')
-    try {
-        let coupon = await Coupon.findOne({ code: req.body.code.toUpperCase() });
-        if (coupon) return res.status(400).send('Coupon code already exists');
-
-        coupon = new Coupon({
-            ...req.body,
-            code: req.body.code.toUpperCase(),
-        });
-
-        await coupon.save();
-        res.status(201).send(coupon);
-    } catch (error) {
-        res.status(500).send('Error creating coupon: ' + error.message);
-    }
-};
-
-// ✏️ Update a coupon
-export const updateCoupon = async (req, res) => {
-    try {
-        // 1. Verify coupon existence
-        let coupon = await Coupon.findById(req.params.id);
-        if (!coupon) return res.status(404).send('Coupon not found');
-
-        // 2. Check for code uniqueness if the code is being changed
         if (req.body.code && req.body.code.toUpperCase() !== coupon.code) {
-            const existingCoupon = await Coupon.findOne({ code: req.body.code.toUpperCase() });
-            if (existingCoupon) return res.status(400).send('Coupon code already exists');
+            const existing = await Coupon.findOne({ code: req.body.code.toUpperCase() }).lean();
+            if (existing) throw createError("كود الخصم الجديد موجود مسبقاً", 400);
         }
 
-        // 3. Map frontend keys to backend database schema keys explicitly
         const updateFields = {
             ...req.body,
             code: req.body.code ? req.body.code.toUpperCase() : coupon.code,
-
-            // Explicit mapping to bridge the frontend vs backend name gap
-            minCartValue: req.body.minPurchaseAmount !== undefined
-                ? req.body.minPurchaseAmount
-                : req.body.minCartValue,
-
-            maxDiscount: req.body.maxDiscountAmount !== undefined
-                ? req.body.maxDiscountAmount
-                : req.body.maxDiscount,
-
+            minCartValue: req.body.minPurchaseAmount !== undefined ? req.body.minPurchaseAmount : req.body.minCartValue,
+            maxDiscount: req.body.maxDiscountAmount !== undefined ? req.body.maxDiscountAmount : req.body.maxDiscount,
             updatedAt: new Date(),
         };
 
-        // 4. Update the document with schema validation enabled
-        const updatedCoupon = await Coupon.findByIdAndUpdate(
-            req.params.id,
-            updateFields,
-            {
-                new: true,           // Return the updated document instead of the old one
-                runValidators: true  // Enforce Mongoose schema validation constraints on update
-            }
-        );
-
-        res.send(updatedCoupon);
-    } catch (error) {
-        console.error('Error updating coupon:', error);
-        res.status(500).send('Error updating coupon: ' + error.message);
-    }
+        const updatedCoupon = await Coupon.findByIdAndUpdate(req.params.id, updateFields, { new: true, runValidators: true });
+        res.json(updatedCoupon);
+    } catch (error) { next(error); }
 };
 
-// ❌ Delete a coupon
-export const deleteCoupon = async (req, res) => {
+export const deleteCoupon = async (req, res, next) => {
     try {
-        const coupon = await Coupon.findByIdAndRemove(req.params.id);
-        if (!coupon) return res.status(404).send('Coupon not found');
-        res.send(coupon);
-    } catch (error) {
-        res.status(500).send('Error deleting coupon: ' + error.message);
-    }
+        const coupon = await Coupon.findByIdAndDelete(req.params.id);
+        if (!coupon) throw createError("كوبون غير موجود", 404);
+        res.json(coupon);
+    } catch (error) { next(error); }
 };
 
-// 🛒 Remove coupon from cart and restore original total
-export const removeCouponFromCart = async (req, res) => {
-    try {
-        console.log(req.user._id, 'ddddddddddddddddddddddddddddddddsssssssss')
-        // Find user's cart
-        const cart = await Cart.findOne({ user: req.user._id }).populate('items.product');
-
-        if (!cart) {
-            return res.status(404).json({
-                success: false,
-                message: 'Cart not found'
-            });
-        }
-
-        // Check if coupon is applied
-        if (!cart.appliedCoupon) {
-            return res.status(400).json({
-                success: false,
-                message: 'No coupon applied to cart'
-            });
-        }
-
-        // Store removed coupon data for response
-        const removedCoupon = {
-            code: cart.appliedCoupon.code,
-            discountAmount: cart.appliedCoupon.discountAmount,
-            originalTotal: cart.appliedCoupon.originalTotal
-        };
-
-        // Calculate original subtotal from cart items
-        const originalSubtotal = cart.items.reduce((total, item) => {
-            return total + (item.product.price * item.quantity);
-        }, 0);
-
-        // Remove coupon from cart
-        cart.appliedCoupon = undefined;
-
-        // Restore original total
-        cart.total = originalSubtotal;
-
-        // Save updated cart
-        await cart.save();
-
-        // Send success response
-        res.status(200).json({
-            success: true,
-            message: 'Coupon removed successfully',
-            data: {
-                cart: {
-                    _id: cart._id,
-                    items: cart.items,
-                    subtotal: originalSubtotal,
-                    total: originalSubtotal,
-                    appliedCoupon: null
-                },
-                removedCoupon,
-                originalTotal: originalSubtotal,
-                message: 'Coupon removed and cart total restored'
-            }
-        });
-
-    } catch (error) {
-        console.error('Remove coupon from cart error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error while removing coupon from cart: ' + error.message
-        });
-    }
-};
-
-// 🔍 Validate coupon code and apply to cart
-export const validateCouponCode = async (req, res) => {
+export const validateCouponCode = async (req, res, next) => {
     try {
         const { code } = req.body;
-        console.log('the valid coupon from frontend ')
-        if (!code) {
-            return res.status(400).send('Coupon code is required');
-        }
+        if (!code) throw createError("كود الخصم مطلوب", 400);
 
         const cart = await Cart.findOne({ user: req.user._id }).populate('items.product');
+        if (!cart || !cart.items || cart.items.length === 0) throw createError("السلة فارغة", 400);
 
-        if (!cart) {
-            return res.status(400).send('Cart not found');
-        }
+        const cartTotal = cart.items.reduce((total, item) => total + (item.product.price * item.quantity), 0);
+        if (cartTotal <= 0) throw createError("إجمالي السلة غير صالح", 400);
 
-        if (!cart.items || cart.items.length === 0) {
-            return res.status(400).send('Cart is empty');
-        }
-
-        // Calculate cart total from the cart items
-        const cartTotal = cart.items.reduce((total, item) => {
-            return total + (item.product.price * item.quantity);
-        }, 0);
-
-        console.log(cartTotal, 'cartTotal')
-
-        if (cartTotal <= 0) {
-            return res.status(400).send('Invalid cart total');
-        }
-
-        // Find valid coupon
         const coupon = await Coupon.findOne({
-            code,
-            isActive: true,
-            validFrom: { $lte: new Date() },
-            validUntil: { $gte: new Date() }
+            code: code.toUpperCase(), isActive: true,
+            validFrom: { $lte: new Date() }, validUntil: { $gte: new Date() }
         });
 
-        if (!coupon) {
-            return res.status(400).send('Invalid or expired coupon code');
-        }
+        if (!coupon) throw createError("كود الخصم غير صالح أو منتهي الصلاحية", 400);
+        if (cartTotal < coupon.minCartValue) throw createError(`يجب أن تكون السلة بقيمة ${coupon.minCartValue} كحد أدنى لتطبيق الخصم`, 400);
+        if (coupon.usageLimit && coupon.usedCount >= coupon.usageLimit) throw createError("تم تجاوز الحد الأقصى لاستخدام الكوبون", 400);
 
-        // Validate minimum cart value
-        if (cartTotal < coupon.minCartValue) {
-            return res.status(400).send(`Minimum cart value of ${coupon.minCartValue} required for this coupon`);
-        }
-
-        // Check usage limits
-        if (coupon.usageLimit && coupon.usedCount >= coupon.usageLimit) {
-            return res.status(400).send('Coupon usage limit exceeded');
-        }
-
-        // Check if user has already used this coupon
         if (coupon.onePerUser) {
-            const existingUsage = await Order.findOne({
-                user: req.user._id,
-                'coupon.code': coupon.code,
-                status: { $in: ['confirmed', 'processing', 'completed'] }
-            });
-            if (existingUsage) {
-                return res.status(400).send('You have already used this coupon');
-            }
+            const existingUsage = await Order.findOne({ buyer: req.user._id, 'coupon.code': coupon.code }).lean();
+            if (existingUsage) throw createError("لقد قمت باستخدام هذا الكود مسبقاً", 400);
         }
 
-        // Calculate discount
-        let discountAmount = 0;
-
-        if (coupon.discountType === 'percentage') {
-            discountAmount = (cartTotal * coupon.discountValue) / 100;
-
-            // Apply max discount limit
-            if (coupon.maxDiscount && discountAmount > coupon.maxDiscount) {
-                discountAmount = coupon.maxDiscount;
-            }
-        } else if (coupon.discountType === 'fixed') {
-            discountAmount = coupon.discountValue;
-        }
-
-        // Ensure discount doesn't exceed cart total
+        let discountAmount = coupon.discountType === 'percentage' ? (cartTotal * coupon.discountValue) / 100 : coupon.discountValue;
+        if (coupon.maxDiscount && discountAmount > coupon.maxDiscount) discountAmount = coupon.maxDiscount;
         discountAmount = Math.min(discountAmount, cartTotal);
+
         const discountedTotal = Math.max(0, cartTotal - discountAmount);
 
-        // ✅ Update the cart total with the discounted amount
-        cart.total = discountedTotal;
-
-        // Store coupon in cart for later use during checkout
-        cart.appliedCoupon = {
-            code: coupon.code,
-            discountAmount: discountAmount,
-            discountedTotal: discountedTotal,
-            originalTotal: cartTotal, // Store original for reference
-            appliedAt: new Date()
-        };
-
+        cart.appliedCoupon = { code: coupon.code, discountAmount, discountedTotal, originalTotal: cartTotal, appliedAt: new Date() };
         await cart.save();
-        console.log('Updated cart total after discount:', cart.total);
-        console.log(cart.total, 'cart.total')
-        // Prepare response
-        const response = {
-            valid: true,
-            coupon: {
-                code: coupon.code,
-                discountType: coupon.discountType,
-                discountValue: coupon.discountValue,
-                minCartValue: coupon.minCartValue,
-                maxDiscount: coupon.maxDiscount
-            },
-            originalTotal: parseFloat(cartTotal.toFixed(2)),
-            discountedTotal: parseFloat(discountedTotal.toFixed(2)),
-            discountAmount: parseFloat(discountAmount.toFixed(2)),
-            message: `Coupon applied successfully! You saved $${discountAmount.toFixed(2)}`
-        };
 
-        res.send(response);
+        res.json({
+            success: true, valid: true,
+            coupon: { code: coupon.code, discountType: coupon.discountType, discountValue: coupon.discountValue, maxDiscount: coupon.maxDiscount },
+            originalTotal: cartTotal, discountedTotal, discountAmount,
+            message: `تم تطبيق الخصم بنجاح`
+        });
+    } catch (error) { next(error); }
+};
 
-    } catch (error) {
-        console.error('Coupon validation error:', error);
-        res.status(500).send('Error validating coupon: ' + error.message);
-    }
+export const removeCouponFromCart = async (req, res, next) => {
+    try {
+        const cart = await Cart.findOne({ user: req.user._id }).populate('items.product');
+        if (!cart) throw createError("السلة غير موجودة", 404);
+        if (!cart.appliedCoupon) throw createError("لا يوجد كوبون مطبق", 400);
+
+        const removedCoupon = cart.appliedCoupon;
+        const originalSubtotal = cart.items.reduce((total, item) => total + (item.product.price * item.quantity), 0);
+
+        cart.appliedCoupon = undefined;
+        cart.total = originalSubtotal;
+        await cart.save();
+
+        res.json({
+            success: true, message: 'تم إزالة الكوبون بنجاح',
+            data: { cart: { _id: cart._id, items: cart.items, total: originalSubtotal, appliedCoupon: null }, removedCoupon, originalTotal: originalSubtotal }
+        });
+    } catch (error) { next(error); }
 };
