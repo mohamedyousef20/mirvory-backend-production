@@ -6,6 +6,7 @@ import User from '../models/user.model.js';
 import sendEmail from '../middlewares/email.middleware.js';
 import createError from '../utils/error.js';
 import { createNotifications } from '../utils/notification.js';
+import { formatPaginationResponse } from '../middlewares/pagination.js';
 
 // ==========================================
 // 🛠 HELPER FUNCTIONS
@@ -17,46 +18,22 @@ const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 // ==========================================
 export const searchUsers = async (req, res, next) => {
   try {
-    let { q = "", role, page = 1, limit = 10 } = req.query;
+    const { page, limit, skip } = req.pagination;
+    const sortObj = req.sort || { createdAt: -1 };
+    const filterObj = req.filter || {};
+    const searchFilter = req.searchFilter || {};
 
-    q = q.trim();
-    page = Math.max(1, parseInt(page));
-    limit = Math.max(1, parseInt(limit));
+    const filter = { ...filterObj, ...searchFilter };
 
-    const searchFilter = {};
-
-    if (q) {
-      // Prevent ReDoS by escaping regex characters
-      const safeQuery = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      searchFilter.$or = [
-        { firstName: { $regex: safeQuery, $options: 'i' } },
-        { lastName: { $regex: safeQuery, $options: 'i' } },
-        { email: { $regex: safeQuery, $options: 'i' } },
-        { phone: { $regex: safeQuery, $options: 'i' } }
-      ];
-    }
-
-    if (role && ["user", "seller", "admin"].includes(role)) {
-      searchFilter.role = role;
-    }
-
-    const total = await User.countDocuments(searchFilter);
-    const users = await User.find(searchFilter)
+    const total = await User.countDocuments(filter);
+    const users = await User.find(filter)
       .select("_id firstName lastName email phone role isActive isVerified createdAt")
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
+      .sort(sortObj)
+      .skip(skip)
       .limit(limit)
       .lean();
 
-    res.status(200).json({
-      success: true,
-      data: users,
-      count: users.length,
-      total,
-      page,
-      pages: Math.ceil(total / limit),
-      message: "تم العثور على النتائج بنجاح",
-    });
+    res.status(200).json(formatPaginationResponse(users, total, req.pagination));
   } catch (error) {
     console.error("Error searching users:", error);
     next(new createError("حدث خطأ أثناء البحث", 500));
@@ -65,48 +42,46 @@ export const searchUsers = async (req, res, next) => {
 
 export const searchUsersForAdmin = async (req, res, next) => {
   try {
-    const { q, role, isActive } = req.query;
-    const searchFilter = {};
+    const { page, limit, skip } = req.pagination;
+    const sortObj = req.sort || { createdAt: -1 };
+    const filterObj = req.filter || {};
+    const searchFilter = req.searchFilter || {};
 
-    if (q && q.trim() !== "") {
-      const safeQuery = q.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      searchFilter.$or = [
-        { firstName: { $regex: safeQuery, $options: 'i' } },
-        { lastName: { $regex: safeQuery, $options: 'i' } },
-        { email: { $regex: safeQuery, $options: 'i' } },
-        { phone: { $regex: safeQuery, $options: 'i' } }
-      ];
-    }
+    const filter = { ...filterObj, ...searchFilter };
 
-    if (role && ['user', 'seller', 'admin'].includes(role)) {
-      searchFilter.role = role;
-    }
-
-    if (isActive !== undefined) {
-      searchFilter.isActive = isActive === 'true';
-    }
-
-    const users = await User.find(searchFilter)
-      .select('_id firstName lastName email phone role isActive createdAt')
-      .limit(100)
-      .sort({ createdAt: -1 })
+    const total = await User.countDocuments(filter);
+    const users = await User.find(filter)
+      .select("_id firstName lastName email phone role isActive isVerified createdAt")
+      .sort(sortObj)
+      .skip(skip)
+      .limit(limit)
       .lean();
 
-    res.status(200).json({
-      success: true,
-      data: users,
-      count: users.length
-    });
+    res.status(200).json(formatPaginationResponse(users, total, req.pagination));
   } catch (error) {
-    console.error('Error in searchUsersForAdmin:', error);
-    next(new createError("فشل في البحث", 500));
+    console.error("Error searching users for admin:", error);
+    next(new createError("حدث خطأ أثناء البحث", 500));
   }
 };
 
 export const getSellerForAdmin = async (req, res, next) => {
   try {
-    const seller = await User.find({ role: 'seller' }).lean();
-    res.status(200).json(seller);
+    const { page, limit, skip } = req.pagination;
+    const sortObj = req.sort || { createdAt: -1 };
+    const filterObj = req.filter || {};
+    const searchFilter = req.searchFilter || {};
+
+    const filter = { role: 'seller', ...filterObj, ...searchFilter };
+
+    const total = await User.countDocuments(filter);
+    const sellers = await User.find(filter)
+      .select("_id firstName lastName email phone role isActive isVerified createdAt")
+      .sort(sortObj)
+      .skip(skip)
+      .limit(limit)
+      .lean();
+console.log(sellers,'12345688')
+    res.status(200).json(formatPaginationResponse(sellers, total, req.pagination));
   } catch (error) {
     next(new createError(error.message, 500));
   }
@@ -114,10 +89,22 @@ export const getSellerForAdmin = async (req, res, next) => {
 
 export const getUsersForAdmin = async (req, res, next) => {
   try {
-    const users = await User.find({ role: 'user' })
+    const { page, limit, skip } = req.pagination;
+    const sortObj = req.sort || { createdAt: -1 };
+    const filterObj = req.filter || {};
+    const searchFilter = req.searchFilter || {};
+
+    const filter = { role: 'user', ...filterObj, ...searchFilter };
+
+    const total = await User.countDocuments(filter);
+    const users = await User.find(filter)
       .select('firstName lastName email phone role isActive isVerified address createdAt updatedAt')
+      .sort(sortObj)
+      .skip(skip)
+      .limit(limit)
       .lean();
-    res.status(200).json(users);
+
+    res.status(200).json(formatPaginationResponse(users, total, req.pagination));
   } catch (error) {
     next(new createError(error.message, 500));
   }

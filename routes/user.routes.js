@@ -6,6 +6,10 @@ import { registerUserValid } from '../validations/user/registerUserValid.js'
 import { loginUserValid } from '../validations/user/loginUserValid.js';
 import { changePasswordValid, forgotPasswordValid, resendValid, resetPasswordValid, verifyEmailValid, verifyResetCodeValid } from '../validations/user/authValid.js';
 import { updateUserValid } from '../validations/user/updateUserValid.js';
+import { paginate } from '../middlewares/pagination.js';
+import { sort } from '../middlewares/sort.js';
+import { search, buildFilter, commonFilters } from '../middlewares/search.js';
+
 const router = express.Router();
 
 router.post('/register',registerUserValid,register);
@@ -30,12 +34,12 @@ router.use(protect);
 router.get('/me', getMe);
 router.patch('/profile', updateUserValid,updateProfile);
 router.patch('/change-password', changePasswordValid,changeUserPassword);
-router.get('/seller/orders', isSeller, getSellerOrders);
+router.get('/seller/orders', isSeller, paginate(12), sort({ createdAt: -1 }), getSellerOrders);
 router.get('/seller/balance', isSeller, getSellerBalance);
-router.get('/admin/sellers', isAdmin, getSellerForAdmin);
-router.get('/admin/users', isAdmin, getUsersForAdmin);
-router.get('/search', isAdmin, searchUsers);
-router.get('/admin/search', isAdmin, searchUsersForAdmin);
+router.get('/admin/sellers', isAdmin, paginate(12), sort({ createdAt: -1 }), buildFilter(commonFilters.user), search(['firstName', 'lastName', 'email']), getSellerForAdmin);
+router.get('/admin/users', isAdmin, paginate(12), sort({ createdAt: -1 }), buildFilter(commonFilters.user), search(['firstName', 'lastName', 'email']), getUsersForAdmin);
+router.get('/search', isAdmin, paginate(12), sort({ createdAt: -1 }), search(['firstName', 'lastName', 'email']), searchUsers);
+router.get('/admin/search', isAdmin, paginate(12), sort({ createdAt: -1 }), search(['firstName', 'lastName', 'email']), searchUsersForAdmin);
 
 router.patch('/admin/vendor/balance',isAdmin, updateVendorBalanceByAdmin);
 

@@ -6,14 +6,17 @@ import { getAdminOrders, getSellerOrders,
       createOrderFilterObj, updateDeliveryStatus,
       getUserOrderById, getUserOrders, printInvoice } from '../controllers/order.controller.js';
 import { isAdmin, isSeller, protect } from '../middlewares/auth.js';
+import { paginate } from '../middlewares/pagination.js';
+import { sort } from '../middlewares/sort.js';
+import { search, buildFilter, commonFilters } from '../middlewares/search.js';
 
 const router = express.Router();
 router.use(protect);
 
-router.post('/complete',isAdmin, orderComplete); 
-router.get('/', getUserOrders);
-router.get("/admin/all", isAdmin, createOrderFilterObj,  getAdminOrders); 
-router.get('/seller', isSeller, createOrderFilterObj, getSellerOrders);
+router.post('/complete',isAdmin, orderComplete);
+router.get('/', paginate(12), sort({ createdAt: -1 }), buildFilter(commonFilters.order), getUserOrders);
+router.get("/admin/all", isAdmin, paginate(12), sort({ createdAt: -1 }), buildFilter(commonFilters.order), search(['orderNumber']), getAdminOrders);
+router.get('/seller', isSeller, paginate(12), sort({ createdAt: -1 }), buildFilter(commonFilters.order), search(['orderNumber']), getSellerOrders);
 router.get('/:id', getUserOrderById);
 router.get('/:id/invoice', printInvoice);
 // router.get('/vendor/:vendorId/earnings', isSeller, getVendorEarnings);

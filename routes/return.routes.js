@@ -12,11 +12,9 @@ router.post('/', createReturnRequest);
 // جلب طلبات الاسترجاع
 router.get('/', getReturnRequests);
 
-
-router.get('/:id', getReturnRequestById);
-
 router.get('/admin', isAdmin, getReturnRequestsForAdmin);
 
+router.get('/:id', getReturnRequestById);
 
 router.patch('/', isAdmin, updateReturnStatus);
 

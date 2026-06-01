@@ -27,7 +27,7 @@ export const createNotifications = async ({
     }
 
     const docs = recipients.map((user) => ({
-        user: user._id,
+        userId: user._id,
         role: user.role,
         actor,
         title,
@@ -35,7 +35,7 @@ export const createNotifications = async ({
         type,
         data,
         link,
-        is_read: false,
+        seen: false,
     }));
 
     const saved = await Notification.insertMany(docs);
@@ -43,8 +43,8 @@ export const createNotifications = async ({
     if (io) {
         console.log('Emitting notifications to', saved.length, 'recipients');
         saved.forEach((notif) => {
-            console.log('Emitting to user room:', String(notif.user));
-            io.to(String(notif.user)).emit("notification", {
+            console.log('Emitting to user room:', String(notif.userId));
+            io.to(String(notif.userId)).emit("notification", {
                 _id: notif._id,
                 title: notif.title,
                 message: notif.message,

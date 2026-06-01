@@ -12,7 +12,11 @@ export const getNotifications = async (req, res, next) => {
     const role = req.user.role;
 
     const notifications = await Notification.find({
-      $or: [{ userId }, { role }, { type: 'ALL_USERS' }],
+      $or: [
+        { userId },
+        { role, userId: { $exists: false } },
+        { type: 'ALL_USERS', userId: { $exists: false } }
+      ]
     }).sort({ createdAt: -1 }).lean();
 
     res.json({ success: true, notifications });
@@ -66,22 +70,21 @@ export const sendNotification = async (req, res, next) => {
     // ✅ الاعتماد على المساعد (Helper) لضمان تشغيل الـ Sockets في الوقت الفعلي
     if (userId && userId.length > 0) {
       await createNotifications({
-        io, title, message, type, actor: req.user._id, userIds: userId, data: { orderId }, link: orderId ? `/orders/${orderId}` : '/'
+        io, title, message, type, actor: req.user._id, userId: userId, data: { orderId }, link: orderId ? `/orders/${orderId}` : '/'
       });
     } else if (role) {
       const targetUsers = await User.find({ role }).select('_id').lean();
       if (targetUsers.length > 0) {
         await createNotifications({
-          io, title, message, type, actor: req.user._id, userIds: targetUsers.map(u => u._id.toString()), data: { orderId }
+          io, title, message, type, actor: req.user._id, userId: targetUsers.map(u => u._id.toString()), data: { orderId }
         });
       }
     } else {
       // إشعار عام للجميع
       await createNotifications({
-        io, title, message, type: 'ALL_USERS', actor: req.user._id, userIds: [], data: {}
+        io, title, message, type: 'ALL_USERS', actor: req.user._id, userId: [], data: {}
       });
     }
-
     res.status(201).json({ success: true, message: 'تم بث الإشعار بنجاح' });
   } catch (error) { next(error); }
 };

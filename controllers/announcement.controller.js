@@ -37,7 +37,6 @@ export const getMainAnnouncement = async (req, res, next) => {
             isMain: true, status: 'active', startDate: { $lte: new Date() }, endDate: { $gte: new Date() }
         }).sort({ createdAt: -1 }).lean();
 
-        if (announcements.length === 0) return res.status(404).json({ message: 'لا يوجد إعلان رئيسي نشط' });
         res.json(announcements);
     } catch (error) { next(error); }
 };

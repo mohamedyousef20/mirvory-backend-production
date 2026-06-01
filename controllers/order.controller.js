@@ -5,6 +5,7 @@ import Cart from '../models/cart.model.js';
 import mongoose from 'mongoose';
 import createError from '../utils/error.js';
 import { createNotifications } from '../utils/notification.js';
+import { formatPaginationResponse } from '../middlewares/pagination.js';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
@@ -367,33 +368,60 @@ export const confirmPreparation = async (req, res, next) => {
 
 export const getAdminOrders = async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 25;
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = req.pagination;
+    const sortObj = req.sort || { createdAt: -1 };
+    const filterObj = req.filter || {};
+    const searchFilter = req.searchFilter || {};
 
-    const total = await Order.countDocuments();
-    const orders = await Order.find(req.filterObj || {})
+    const filter = { ...filterObj, ...searchFilter };
+
+    const total = await Order.countDocuments(filter);
+    const orders = await Order.find(filter)
       .populate('buyer', 'firstName lastName email phone')
       .populate({ path: 'items.product', select: 'title titleEn images' })
       .populate({ path: 'items.seller', select: 'firstName lastName email phone wallet' })
-      .sort({ createdAt: -1 }).skip(skip).limit(limit).lean();
+      .sort(sortObj).skip(skip).limit(limit).lean();
 
-    res.json({ orders, pagination: { currentPage: page, totalPages: Math.ceil(total / limit), totalOrders: total, limit } });
+    res.json(formatPaginationResponse(orders, total, req.pagination));
   } catch (err) { next(err); }
 };
 
 export const getUserOrders = async (req, res, next) => {
   try {
-    const orders = await Order.find({ buyer: req.user._id }).sort({ createdAt: -1 }).lean();
-    res.json(orders);
+    const { page, limit, skip } = req.pagination;
+    const sortObj = req.sort || { createdAt: -1 };
+    const filterObj = req.filter || {};
+    const searchFilter = req.searchFilter || {};
+
+    const filter = { buyer: req.user._id, ...filterObj, ...searchFilter };
+
+    const total = await Order.countDocuments(filter);
+    const orders = await Order.find(filter)
+      .sort(sortObj)
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    res.json(formatPaginationResponse(orders, total, req.pagination));
   } catch (err) { next(err); }
 };
 
 export const getSellerOrders = async (req, res, next) => {
   try {
-    const orders = await Order.find({ "items.seller": req.user._id })
+    const { page, limit, skip } = req.pagination;
+    const sortObj = req.sort || { createdAt: -1 };
+    const filterObj = req.filter || {};
+    const searchFilter = req.searchFilter || {};
+
+    const filter = { "items.seller": req.user._id, ...filterObj, ...searchFilter };
+
+    const total = await Order.countDocuments(filter);
+    const orders = await Order.find(filter)
       .select('-secretCode -discount -payoutProcessed')
       .populate('items.product', 'title titleEn images')
+      .sort(sortObj)
+      .skip(skip)
+      .limit(limit)
       .lean();
 
     const filteredOrders = orders.map(order => {
@@ -402,7 +430,7 @@ export const getSellerOrders = async (req, res, next) => {
       return { ...order, items: sellerItems, sellerSubtotal };
     });
 
-    res.json(filteredOrders);
+    res.json(formatPaginationResponse(filteredOrders, total, req.pagination));
   } catch (error) { next(error); }
 };
 

@@ -142,7 +142,6 @@ export const getReturnRequestsForAdmin = async (req, res, next) => {
       .lean();
 
     const total = await ReturnRequest.countDocuments();
-
     res.status(200).json({
       data: returnRequests,
       pagination: { currentPage: page, totalPages: Math.ceil(total / limit), total }

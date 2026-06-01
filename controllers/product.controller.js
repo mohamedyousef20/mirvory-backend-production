@@ -3,65 +3,9 @@ import User from '../models/user.model.js';
 import mongoose from 'mongoose';
 import { createNotifications } from '../utils/notification.js';
 import createError from '../utils/error.js';
+import { formatPaginationResponse } from '../middlewares/pagination.js';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
-
-// ==========================================
-// 🛠 FILTER & SORT MIDDLEWARES
-// ==========================================
-export const createFilterObj = (req, res, next) => {
-  let filterObj = {};
-  const { minPrice, maxPrice, isApproved, status, search, category, isFeatured, discountPercentage } = req.query;
-
-  if (minPrice || maxPrice) {
-    filterObj.price = {};
-    if (minPrice) filterObj.price.$gte = parseFloat(minPrice);
-    if (maxPrice) filterObj.price.$lte = parseFloat(maxPrice);
-  }
-
-  if (isApproved !== undefined) filterObj.isApproved = isApproved === 'true';
-  if (status) filterObj.status = status;
-  if (isFeatured !== undefined) filterObj.isFeatured = isFeatured === 'true';
-  if (discountPercentage) filterObj.discountPercentage = { $gte: parseFloat(discountPercentage) };
-
-  if (req.params.categoryId && isValidObjectId(req.params.categoryId)) {
-    filterObj.category = req.params.categoryId;
-  } else if (category) {
-    const categoryIds = String(category).split(',').map(id => id.trim()).filter(id => isValidObjectId(id));
-    if (categoryIds.length > 1) {
-      filterObj.category = { $in: categoryIds };
-    } else if (categoryIds.length === 1) {
-      filterObj.category = categoryIds[0];
-    }
-  }
-
-  if (search) {
-    const searchQuery = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    filterObj.$or = [
-      { title: { $regex: searchQuery, $options: 'i' } },
-      { description: { $regex: searchQuery, $options: 'i' } }
-    ];
-  }
-
-  req.filterObj = filterObj;
-  next();
-};
-
-export const createSortObj = (req, res, next) => {
-  let sortObj = {};
-  if (req.query.sort) {
-    const sortFields = String(req.query.sort).split(',');
-    sortFields.forEach(field => {
-      const sortOrder = field.startsWith('-') ? -1 : 1;
-      const fieldName = field.replace(/^-/, '');
-      sortObj[fieldName] = sortOrder;
-    });
-  } else {
-    sortObj.createdAt = -1;
-  }
-  req.sortObj = sortObj;
-  next();
-};
 
 // ==========================================
 // 📦 PRODUCT CRUD & MANAGEMENT
@@ -310,56 +254,59 @@ export const rejectProduct = async (req, res, next) => {
 // ==========================================
 export const getProducts = async (req, res, next) => {
   try {
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.max(1, parseInt(req.query.limit) || 12);
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = req.pagination;
+    const sortObj = req.sort || { createdAt: -1 };
+    const filterObj = req.filter || {};
+    const searchFilter = req.searchFilter || {};
 
-    const filter = { isApproved: true, status: 'available', ...(req.filterObj || {}) };
+    const filter = { isApproved: true, status: 'available', ...filterObj, ...searchFilter };
 
     const total = await Product.countDocuments(filter);
     const products = await Product.find(filter)
       .populate('seller', 'firstName lastName')
       .populate('category', 'name nameEn')
-      .sort(req.sortObj || { createdAt: -1 })
+      .sort(sortObj)
       .skip(skip).limit(limit).lean();
 
-    res.status(200).json({ success: true, products, pagination: { current: page, pages: Math.ceil(total / limit), total } });
+    res.status(200).json(formatPaginationResponse(products, total, req.pagination));
   } catch (error) { next(error); }
 };
 
 export const getProductsForAdmin = async (req, res, next) => {
   try {
     if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw createError("مرفوض", 403);
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.max(1, parseInt(req.query.limit) || 10);
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = req.pagination;
+    const sortObj = req.sort || { createdAt: -1 };
+    const filterObj = req.filter || {};
+    const searchFilter = req.searchFilter || {};
 
-    const filter = { ...(req.filterObj || {}) };
+    const filter = { ...filterObj, ...searchFilter };
     const total = await Product.countDocuments(filter);
     const products = await Product.find(filter)
       .populate('seller', 'firstName lastName email')
       .populate('category', 'name nameEn')
-      .sort(req.sortObj || { createdAt: -1 })
+      .sort(sortObj)
       .skip(skip).limit(limit).lean();
 
-    res.status(200).json({ success: true, products, pagination: { current: page, pages: Math.ceil(total / limit), total } });
+    res.status(200).json(formatPaginationResponse(products, total, req.pagination));
   } catch (error) { next(error); }
 };
 
 export const getSellerProducts = async (req, res, next) => {
   try {
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.max(1, parseInt(req.query.limit) || 10);
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = req.pagination;
+    const sortObj = req.sort || { createdAt: -1 };
+    const filterObj = req.filter || {};
+    const searchFilter = req.searchFilter || {};
 
-    const filter = { seller: req.user._id, status: { $ne: 'deleted' }, ...(req.filterObj || {}) };
+    const filter = { seller: req.user._id, status: { $ne: 'deleted' }, ...filterObj, ...searchFilter };
     const total = await Product.countDocuments(filter);
     const products = await Product.find(filter)
       .populate('category', 'name nameEn')
-      .sort(req.sortObj || { createdAt: -1 })
+      .sort(sortObj)
       .skip(skip).limit(limit).lean();
 
-    res.status(200).json({ success: true, products, pagination: { current: page, pages: Math.ceil(total / limit), total } });
+    res.status(200).json(formatPaginationResponse(products, total, req.pagination));
   } catch (error) { next(error); }
 };
 
@@ -379,21 +326,29 @@ export const getProductById = async (req, res, next) => {
 
 export const getFeaturedProducts = async (req, res, next) => {
   try {
-    const products = await Product.find({ isApproved: true, isFeatured: true, status: 'available' })
+    const filter = { isApproved: true, isFeatured: true, status: 'available' };
+    const products = await Product.find(filter)
       .populate('seller', 'firstName lastName')
       .populate('category', 'name nameEn')
-      .sort({ createdAt: -1 }).limit(10).lean();
-    res.status(200).json({ success: true, products });
+      .sort({ isFeatured: -1, createdAt: -1 })
+      .limit(12)
+      .lean();
+
+    res.status(200).json({ success: true, data: products });
   } catch (error) { next(error); }
 };
 
 export const getNewArrivals = async (req, res, next) => {
   try {
-    const products = await Product.find({ isApproved: true, status: 'available' })
+    const filter = { isApproved: true, status: 'available' };
+    const products = await Product.find(filter)
       .populate('seller', 'firstName lastName')
       .populate('category', 'name nameEn')
-      .sort({ createdAt: -1 }).limit(10).lean();
-    res.status(200).json({ success: true, products });
+      .sort({ createdAt: -1 })
+      .limit(12)
+      .lean();
+
+    res.status(200).json({ success: true, data: products });
   } catch (error) { next(error); }
 };
 
@@ -402,48 +357,35 @@ export const getProductsByCategory = async (req, res, next) => {
     const { categoryId } = req.params;
     if (!isValidObjectId(categoryId)) throw createError("معرف القسم غير صالح", 400);
 
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.max(1, parseInt(req.query.limit) || 12);
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = req.pagination;
+    const sortObj = req.sort || { createdAt: -1 };
+    const filterObj = req.filter || {};
+    const searchFilter = req.searchFilter || {};
 
-    const filter = { isApproved: true, status: 'available', category: categoryId, ...(req.filterObj || {}) };
+    const filter = { isApproved: true, status: 'available', category: categoryId, ...filterObj, ...searchFilter };
     const total = await Product.countDocuments(filter);
     const products = await Product.find(filter)
-      .sort(req.sortObj || { createdAt: -1 })
+      .sort(sortObj)
       .skip(skip).limit(limit).lean();
 
-    res.status(200).json({ success: true, products, pagination: { current: page, pages: Math.ceil(total / limit), total } });
+    res.status(200).json(formatPaginationResponse(products, total, req.pagination));
   } catch (error) { next(error); }
 };
 
 export const searchProducts = async (req, res, next) => {
   try {
-    const { q } = req.query;
-    if (!q || q.trim() === '') throw createError("كلمة البحث مطلوبة", 400);
+    const { page, limit, skip } = req.pagination;
+    const sortObj = req.sort || { createdAt: -1 };
+    const searchFilter = req.searchFilter || {};
 
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.max(1, parseInt(req.query.limit) || 12);
-    const skip = (page - 1) * limit;
-
-    const searchQuery = q.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const { $or, ...restFilterObj } = req.filterObj || {};
-
-    const searchFilter = {
-      isApproved: true, status: 'available',
-      $or: [
-        { title: { $regex: searchQuery, $options: 'i' } },
-        { description: { $regex: searchQuery, $options: 'i' } }
-      ],
-      ...restFilterObj
-    };
-
-    const total = await Product.countDocuments(searchFilter);
-    const products = await Product.find(searchFilter)
+    const filter = { isApproved: true, status: 'available', ...searchFilter };
+    const total = await Product.countDocuments(filter);
+    const products = await Product.find(filter)
       .populate('seller', 'firstName lastName')
       .populate('category', 'name nameEn')
-      .sort(req.sortObj || { createdAt: -1 })
+      .sort(sortObj)
       .skip(skip).limit(limit).lean();
 
-    res.status(200).json({ success: true, products, query: q, pagination: { current: page, pages: Math.ceil(total / limit), total } });
+    res.status(200).json(formatPaginationResponse(products, total, req.pagination));
   } catch (error) { next(error); }
 };

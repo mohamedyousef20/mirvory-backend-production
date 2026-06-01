@@ -11,6 +11,7 @@ import wishlistRoutes from './wishlist.routes.js';
 import couponRoutes from './coupon.routes.js';
 // import addressesRoutes from './address.routes.js';
 import dashboardRoutes from './dashboard.routes.js';
+import complaintRoutes from './complaint.routes.js';
 // import analyticsRoutes from './analytics.routes.js';
 // import transactionsRoutes from './transactions.routes.js';
 // import superAdminRoutes from './superAdmin.routes.js';
@@ -32,6 +33,7 @@ const mountRoutes = (app) => {
     app.use('/api/coupons', couponRoutes);
     // app.use('/api/addresses', addressesRoutes);
     app.use('/api/dashboard', dashboardRoutes);
+    app.use('/api/complaints', complaintRoutes);
 //     app.use('/api/analytics', analyticsRoutes);
 //     app.use('/api/transactions', transactionsRoutes);
 //     app.use('/api/admin/super', superAdminRoutes);
