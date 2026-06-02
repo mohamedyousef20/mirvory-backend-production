@@ -10,8 +10,7 @@ import {
   getNewArrivals,
   getSellerProducts,
   deleteProduct,
-  updateProduct,
-  searchProducts
+  updateProduct
 } from '../controllers/product.controller.js';
 import {
   createRating,
@@ -20,10 +19,17 @@ import {
   updateRating,
   deleteRating
 } from '../controllers/rating.controller.js';
+import {
+  searchProducts,
+  getSearchSuggestions,
+  getRecentSearches,
+  getTrendingSearches,
+  clearSearchHistory
+} from '../controllers/search.controller.js';
 import { isAdmin, isSeller, protect } from '../middlewares/auth.js';
 import { paginate } from '../middlewares/pagination.js';
 import { sort } from '../middlewares/sort.js';
-import { search, buildFilter, commonFilters } from '../middlewares/search.js';
+import { buildFilter, commonFilters } from '../middlewares/search.js';
 
 
 const router = express.Router({ mergeParams: true });
@@ -39,10 +45,19 @@ router.delete('/:id', protect, isSeller, deleteProduct);
 router.patch('/:id', protect, isSeller, updateProduct);
 
 // مسارات عامة
-// Search products
-router.get('/search', paginate(12), sort(), search(['title', 'description']), searchProducts);
+// Advanced search endpoint
+router.get('/search', searchProducts);
+// Search suggestions/autocomplete
+router.get('/search/suggestions', getSearchSuggestions);
+// Get recent searches (requires auth)
+router.get('/search/recent', protect, getRecentSearches);
+// Get trending searches (public)
+router.get('/search/trending', getTrendingSearches);
+// Clear search history (requires auth)
+router.delete('/search/history', protect, clearSearchHistory);
+
 // Get all products in category
-router.get('/', paginate(12), sort(), buildFilter(commonFilters.product), search(['title', 'description']), getProducts);
+router.get('/', paginate(12), sort(), buildFilter(commonFilters.product), getProducts);
 // Get Featured products in category
 router.get('/featured/product', getFeaturedProducts);
 // Get New Arrivals products in category

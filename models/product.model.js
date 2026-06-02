@@ -17,6 +17,8 @@ const productSchema = new mongoose.Schema({
   isApproved: { type: Boolean, default: false },
   category: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
   isFeatured: { type: Boolean, default: false },
+  brand: { type: String, default: '' },
+  tags: [{ type: String }],
   ratings: {
     average: { type: Number, default: 0, min: 0, max: 5 },
     count: { type: Number, default: 0 },
@@ -34,8 +36,29 @@ productSchema.pre('save', function (next) {
 productSchema.virtual('discountAmount').get(function () { return this.price - this.discountedPrice; });
 productSchema.virtual('availableColors').get(function () { return this.colors.filter(c => c.available); });
 
+// Compound indexes for common queries
 productSchema.index({ seller: 1, createdAt: -1 });
 productSchema.index({ category: 1, status: 1 });
 productSchema.index({ isFeatured: 1, status: 1 });
+productSchema.index({ status: 1, isApproved: 1, createdAt: -1 });
+productSchema.index({ price: 1 });
+productSchema.index({ sold: -1 });
+productSchema.index({ 'ratings.average': -1 });
+
+// Text index for full-text search
+productSchema.index({
+  title: 'text',
+  description: 'text',
+  brand: 'text',
+  tags: 'text'
+}, {
+  weights: {
+    title: 10,
+    description: 5,
+    brand: 3,
+    tags: 2
+  },
+  name: 'product_text_search'
+});
 
 export default mongoose.model('Product', productSchema);

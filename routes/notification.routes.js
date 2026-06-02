@@ -16,7 +16,7 @@ router.use(protect);
 // User routes
 router.get('/', getNotifications);
 router.get('/unread-count', getUnreadCount);
-router.put('/read/:id', markAsRead);
+router.patch('/read', markAsRead);
 router.put('/read-all', markAllAsRead);
 router.get("/count", getUnreadCount );
 

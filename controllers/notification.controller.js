@@ -25,14 +25,18 @@ export const getNotifications = async (req, res, next) => {
 
 export const markAsRead = async (req, res, next) => {
   try {
-    const { id } = req.params;
+    const { id } = req.body;
     if (!isValidObjectId(id)) throw createError("المعرف غير صالح", 400);
-
+console.log(id,'ids147')
     const notification = await Notification.findByIdAndUpdate(
       id,
-      { seen: true, deleteAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000) },
+      {
+        seen: true,
+        deleteAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
+      },
       { new: true }
     );
+    console.log(notification,'ids148')
     if (!notification) throw createError('الإشعار غير موجود', 404);
     res.json({ success: true, notification });
   } catch (error) { next(error); }

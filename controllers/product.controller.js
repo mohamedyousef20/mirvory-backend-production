@@ -257,9 +257,8 @@ export const getProducts = async (req, res, next) => {
     const { page, limit, skip } = req.pagination;
     const sortObj = req.sort || { createdAt: -1 };
     const filterObj = req.filter || {};
-    const searchFilter = req.searchFilter || {};
 
-    const filter = { isApproved: true, status: 'available', ...filterObj, ...searchFilter };
+    const filter = { isApproved: true, status: 'available', ...filterObj };
 
     const total = await Product.countDocuments(filter);
     const products = await Product.find(filter)
@@ -278,9 +277,8 @@ export const getProductsForAdmin = async (req, res, next) => {
     const { page, limit, skip } = req.pagination;
     const sortObj = req.sort || { createdAt: -1 };
     const filterObj = req.filter || {};
-    const searchFilter = req.searchFilter || {};
 
-    const filter = { ...filterObj, ...searchFilter };
+    const filter = { ...filterObj };
     const total = await Product.countDocuments(filter);
     const products = await Product.find(filter)
       .populate('seller', 'firstName lastName email')
@@ -297,9 +295,8 @@ export const getSellerProducts = async (req, res, next) => {
     const { page, limit, skip } = req.pagination;
     const sortObj = req.sort || { createdAt: -1 };
     const filterObj = req.filter || {};
-    const searchFilter = req.searchFilter || {};
 
-    const filter = { seller: req.user._id, status: { $ne: 'deleted' }, ...filterObj, ...searchFilter };
+    const filter = { seller: req.user._id, status: { $ne: 'deleted' }, ...filterObj };
     const total = await Product.countDocuments(filter);
     const products = await Product.find(filter)
       .populate('category', 'name nameEn')
@@ -360,29 +357,10 @@ export const getProductsByCategory = async (req, res, next) => {
     const { page, limit, skip } = req.pagination;
     const sortObj = req.sort || { createdAt: -1 };
     const filterObj = req.filter || {};
-    const searchFilter = req.searchFilter || {};
 
-    const filter = { isApproved: true, status: 'available', category: categoryId, ...filterObj, ...searchFilter };
+    const filter = { isApproved: true, status: 'available', category: categoryId, ...filterObj };
     const total = await Product.countDocuments(filter);
     const products = await Product.find(filter)
-      .sort(sortObj)
-      .skip(skip).limit(limit).lean();
-
-    res.status(200).json(formatPaginationResponse(products, total, req.pagination));
-  } catch (error) { next(error); }
-};
-
-export const searchProducts = async (req, res, next) => {
-  try {
-    const { page, limit, skip } = req.pagination;
-    const sortObj = req.sort || { createdAt: -1 };
-    const searchFilter = req.searchFilter || {};
-
-    const filter = { isApproved: true, status: 'available', ...searchFilter };
-    const total = await Product.countDocuments(filter);
-    const products = await Product.find(filter)
-      .populate('seller', 'firstName lastName')
-      .populate('category', 'name nameEn')
       .sort(sortObj)
       .skip(skip).limit(limit).lean();
 

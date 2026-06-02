@@ -10,6 +10,7 @@ import jwt from "jsonwebtoken";
 import connectDB from "./config/db.js";
 import mountRoutes from "./routes/index.route.js";
 import User from "./models/user.model.js";
+import SearchHistory from "./models/searchHistory.model.js";
 
 dotenv.config({ path: "./.env" });
 
