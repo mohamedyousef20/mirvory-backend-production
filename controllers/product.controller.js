@@ -15,12 +15,12 @@ export const createProduct = async (req, res, next) => {
     const productData = req.body.data || req.body;
 
     if (!productData.title || !productData.description || !productData.price || !productData.category) {
-      throw createError("جميع الحقول الأساسية (الاسم، الوصف، السعر، القسم) مطلوبة", 400);
+      throw new createError("جميع الحقول الأساسية (الاسم، الوصف، السعر، القسم) مطلوبة", 400);
     }
-    if (!isValidObjectId(productData.category)) throw createError("القسم المحدد غير صالح", 400);
+    if (!isValidObjectId(productData.category)) throw new createError("القسم المحدد غير صالح", 400);
 
     if (!productData.images || !Array.isArray(productData.images) || productData.images.length === 0) {
-      throw createError("يجب إرفاق صورة واحدة على الأقل للمنتج", 400);
+      throw new createError("يجب إرفاق صورة واحدة على الأقل للمنتج", 400);
     }
 
     let sizes = [];
@@ -40,7 +40,7 @@ export const createProduct = async (req, res, next) => {
 
       if (colors.length > 0) {
         const isValidColors = colors.every(c => c && typeof c === 'object' && c.name && c.value);
-        if (!isValidColors) throw createError("صيغة الألوان غير صحيحة", 400);
+        if (!isValidColors) throw new createError("صيغة الألوان غير صحيحة", 400);
         colors = colors.map(c => ({ name: c.name, value: c.value, available: c.available !== false }));
       }
     }
@@ -49,6 +49,19 @@ export const createProduct = async (req, res, next) => {
     const discountPercentage = parseFloat(productData.discountPercentage) || 0;
     const discountAmount = price * (discountPercentage / 100);
     const discountedPrice = price - discountAmount;
+
+    let multiplier = 0.90;  
+    if (!discountedPrice || discountedPrice <= 0) {
+      multiplier = 0.90;
+    } else if (discountedPrice < 300) {
+      multiplier = 0.82; 
+    } else if (discountedPrice >= 300 && discountedPrice <= 799) {
+      multiplier = 0.85;
+    } else if (discountedPrice >= 800 && discountedPrice <= 1999) {
+      multiplier = 0.88; 
+    }
+
+    const sellerPercentage = discountedPrice * multiplier;
 
     const product = await Product.create({
       seller: req.user._id,
@@ -61,9 +74,9 @@ export const createProduct = async (req, res, next) => {
       discountPercentage,
       discountedPrice,
       category: productData.category,
-      status: 'pending', // دائماً pending ليتطلب مراجعة
+      status: 'pending', 
       isApproved: false,
-      sellerPercentage: discountedPrice * 0.88, // نسبة مبدئية
+      sellerPercentage,
       isFeatured: productData.isFeatured === 'true' || productData.isFeatured === true,
       quantity: parseInt(productData.quantity) || 0
     });
@@ -82,7 +95,7 @@ export const createProduct = async (req, res, next) => {
             io, title: '📦 منتج جديد للمراجعة',
             message: `تم إضافة منتج جديد "${product.title}" بواسطة ${product.seller.firstName}`,
             type: 'PRODUCT_SUBMITTED', actor: req.user._id, userIds: adminUsers.map(a => a._id.toString()), // ✅ تم إصلاح userId لـ userIds
-            data: { productId: product._id }, link: `/admin/products/${product._id}`,
+            data: { productId: product._id }, link: `/products/${product._id}`,
           });
         }
       } catch (err) { console.error("Notification Error:", err); }
@@ -97,16 +110,16 @@ export const createProduct = async (req, res, next) => {
 
 export const updateProduct = async (req, res, next) => {
   try {
-    const { id } = req.params;
-    if (!isValidObjectId(id)) throw createError("معرف المنتج غير صالح", 400);
+    console.log(req.body,'458')
+    const { id, ...updates } = req.body;
+    if (!isValidObjectId(id)) throw new createError("معرف المنتج غير صالح", 400);
 
-    const updates = req.body;
     const product = await Product.findById(id);
 
-    if (!product) throw createError("المنتج غير موجود", 404);
+    if (!product) throw new createError("المنتج غير موجود", 404);
 
     if (product.seller.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
-      throw createError("غير مصرح لك بتحديث هذا المنتج", 403);
+      throw new createError("غير مصرح لك بتحديث هذا المنتج", 403);
     }
 
     if (updates.images && Array.isArray(updates.images)) product.images = updates.images;
@@ -168,14 +181,15 @@ export const updateProduct = async (req, res, next) => {
 
 export const deleteProduct = async (req, res, next) => {
   try {
-    const { id } = req.params;
-    if (!isValidObjectId(id)) throw createError("معرف المنتج غير صالح", 400);
+    const { id } = req.body;
+    console.log(id, '2523')
+    if (!isValidObjectId(id)) throw new createError("معرف المنتج غير صالح", 400);
 
     const product = await Product.findById(id);
-    if (!product) throw createError("المنتج غير موجود", 404);
+    if (!product) throw new createError("المنتج غير موجود", 404);
 
     if (product.seller.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
-      throw createError("غير مصرح لك بحذف هذا المنتج", 403);
+      throw new createError("غير مصرح لك بحذف هذا المنتج", 403);
     }
 
     // 🚨 الحل المعماري الصارم: الحذف المنطقي Soft Delete لحماية استقرار قواعد البيانات المالية
@@ -192,16 +206,16 @@ export const deleteProduct = async (req, res, next) => {
 // ==========================================
 export const approveProduct = async (req, res, next) => {
   try {
-    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw createError("مرفوض. للإدارة فقط.", 403);
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw new createError("مرفوض. للإدارة فقط.", 403);
 
     const id = req.params.id || req.body.id;
-    if (!isValidObjectId(id)) throw createError("معرف المنتج غير صالح", 400);
+    if (!isValidObjectId(id)) throw new createError("معرف المنتج غير صالح", 400);
 
     const product = await Product.findByIdAndUpdate(
       id, { isApproved: true, status: "available", reason: null }, { new: true }
     ).populate("category", "name nameEn").populate("seller", "_id firstName lastName");
 
-    if (!product) throw createError("المنتج غير موجود", 404);
+    if (!product) throw new createError("المنتج غير موجود", 404);
 
     (async () => {
       try {
@@ -219,19 +233,21 @@ export const approveProduct = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
+
+
 export const rejectProduct = async (req, res, next) => {
   try {
-    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw createError("مرفوض. للإدارة فقط.", 403);
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw new createError("مرفوض. للإدارة فقط.", 403);
 
     const { id, reason } = req.body;
-    if (!isValidObjectId(id)) throw createError("معرف المنتج غير صالح", 400);
-    if (!reason || reason.trim() === '') throw createError("يجب توضيح سبب الرفض", 400);
+    if (!isValidObjectId(id)) throw new createError("معرف المنتج غير صالح", 400);
+    if (!reason || reason.trim() === '') throw new createError("يجب توضيح سبب الرفض", 400);
 
     const product = await Product.findByIdAndUpdate(
       id, { isApproved: false, status: "rejected", reason: reason.trim() }, { new: true }
     ).populate("category", "name nameEn").populate("seller", "_id firstName lastName");
 
-    if (!product) throw createError("المنتج غير موجود", 404);
+    if (!product) throw new createError("المنتج غير موجود", 404);
 
     (async () => {
       try {
@@ -249,31 +265,86 @@ export const rejectProduct = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
+export const trustProduct = async (req, res, next) => {
+  try {
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw new createError("مرفوض. للإدارة فقط.", 403);
+
+    const id = req.params.id || req.body.id;
+    if (!isValidObjectId(id)) throw new createError("معرف المنتج غير صالح", 400);
+
+    const product = await Product.findByIdAndUpdate(
+      id, { isTrusted: true }, { new: true }
+    )
+
+    if (!product) throw new createError("المنتج غير موجود", 404);
+
+    (async () => {
+      try {
+        const io = req.app.get("io");
+        await createNotifications({
+          io, title: "✅ تم توثيق  منتجك",
+          message: `تم توثيق منتجك "${product.title}" وهو معروض الآن للبيع.`,
+          type: "PRODUCT_UPDATED", actor: req.user._id, userIds: [product.seller._id.toString()], // ✅ تم التعديل
+          data: { productId: product._id }, link: `/products/${product._id}`,
+        });
+      } catch (err) { console.error(err); }
+    })();
+
+    res.status(200).json({ success: true, message: "تمت التوثيق على المنتج بنجاح", product });
+  } catch (error) { next(error); }
+};
 // ==========================================
 // 🔍 GETTERS & LISTINGS (Optimized with .lean())
 // ==========================================
 export const getProducts = async (req, res, next) => {
   try {
+    console.log('in2525')
     const { page, limit, skip } = req.pagination;
     const sortObj = req.sort || { createdAt: -1 };
     const filterObj = req.filter || {};
 
-    const filter = { isApproved: true, status: 'available', ...filterObj };
+    const filter = {
+      isApproved: true,
+      status: "available",
+    };
+
+    // Price Filter
+    if (
+      filterObj.minPrice !== undefined ||
+      filterObj.maxPrice !== undefined
+    ) {
+      filter.price = {};
+
+      if (filterObj.minPrice !== undefined) {
+        filter.price.$gte = Number(filterObj.minPrice);
+      }
+
+      if (filterObj.maxPrice !== undefined) {
+        filter.price.$lte = Number(filterObj.maxPrice);
+      }
+    }
+
+    // Add remaining filters
+    Object.keys(filterObj).forEach((key) => {
+      if (key !== "minPrice" && key !== "maxPrice") {
+        filter[key] = filterObj[key];
+      }
+    });
 
     const total = await Product.countDocuments(filter);
     const products = await Product.find(filter)
       .populate('seller', 'firstName lastName')
-      .populate('category', 'name nameEn')
-      .sort(sortObj)
-      .skip(skip).limit(limit).lean();
-
+      .populate('category', 'name')
+    
+    console.log(products,'256')
+    console.log(total,'257')
     res.status(200).json(formatPaginationResponse(products, total, req.pagination));
   } catch (error) { next(error); }
 };
 
 export const getProductsForAdmin = async (req, res, next) => {
   try {
-    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw createError("مرفوض", 403);
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw new createError("مرفوض", 403);
     const { page, limit, skip } = req.pagination;
     const sortObj = req.sort || { createdAt: -1 };
     const filterObj = req.filter || {};
@@ -310,13 +381,13 @@ export const getSellerProducts = async (req, res, next) => {
 export const getProductById = async (req, res, next) => {
   try {
     const { productId } = req.params;
-    if (!isValidObjectId(productId)) throw createError("معرف المنتج غير صالح", 400);
+    if (!isValidObjectId(productId)) throw new createError("معرف المنتج غير صالح", 400);
 
     const product = await Product.findById(productId)
       .populate('seller', 'firstName lastName email')
       .populate('category', '_id name nameEn description descriptionEn').lean();
 
-    if (!product || product.status === 'deleted') throw createError("المنتج غير موجود", 404);
+    if (!product || product.status === 'deleted') throw new createError("المنتج غير موجود", 404);
     res.status(200).json({ success: true, product });
   } catch (error) { next(error); }
 };
@@ -352,7 +423,7 @@ export const getNewArrivals = async (req, res, next) => {
 export const getProductsByCategory = async (req, res, next) => {
   try {
     const { categoryId } = req.params;
-    if (!isValidObjectId(categoryId)) throw createError("معرف القسم غير صالح", 400);
+    if (!isValidObjectId(categoryId)) throw new createError("معرف القسم غير صالح", 400);
 
     const { page, limit, skip } = req.pagination;
     const sortObj = req.sort || { createdAt: -1 };

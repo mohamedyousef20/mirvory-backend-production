@@ -8,7 +8,9 @@ import { createNotifications } from '../utils/notification.js';
 import { formatPaginationResponse } from '../middlewares/pagination.js';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
-
+const getEffectivePrice = (product) => {
+  return product.discountedPrice ?? product.price;
+};
 const generateUniqueSecretCode = async (buyerId, retries = 3) => {
   if (retries === 0) throw new Error("فشل في توليد كود سري فريد");
   const timestamp = Date.now().toString().slice(-6);
@@ -63,22 +65,19 @@ export const createOrderFilterObj = (req, res, next) => {
 };
 
 export const createOrder = async (req, res, next) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
+ 
   try {
     const { deliveryMethod, paymentMethod, deliveryInfo } = req.body;
 
     if (!deliveryInfo?.fullName || !deliveryInfo?.phone) {
-      throw createError("بيانات التوصيل (الاسم والرقم) مطلوبة", 400);
+      throw new createError("بيانات التوصيل (الاسم والرقم) مطلوبة", 400);
     }
 
     const cart = await Cart.findOne({ user: req.user._id })
       .populate({ path: "items.product", select: "price seller quantity title" })
-      .session(session);
 
     if (!cart || cart.items.length === 0) {
-      throw createError("السلة فارغة", 404);
+      throw new createError("السلة فارغة", 404);
     }
 
     const bulkOps = cart.items.map((item) => ({
@@ -88,13 +87,17 @@ export const createOrder = async (req, res, next) => {
       },
     }));
 
-    const result = await Product.bulkWrite(bulkOps, { session });
+    const result = await Product.bulkWrite(bulkOps);
     if (result.modifiedCount !== cart.items.length) {
-      throw createError("بعض المنتجات نفذت من المخزون", 400);
+      throw new createError("بعض المنتجات نفذت من المخزون", 400);
     }
 
-    const subtotal = cart.items.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
+    const subtotal = cart.items.reduce(
+      (sum, item) => sum + getEffectivePrice(item.product) * item.quantity,
+      0
+    );
     const discount = cart.appliedCoupon?.discountAmount || 0;
+
     const shippingFee = (subtotal > 500 || deliveryMethod === "pickup") ? 0 : 70;
     const total = Math.max(0, subtotal - discount + shippingFee);
     const secretCode = await generateUniqueSecretCode(req.user._id);
@@ -105,8 +108,7 @@ export const createOrder = async (req, res, next) => {
         product: item.product._id,
         seller: item.product.seller,
         quantity: item.quantity,
-        price: item.product.price,
-        color: item.color,
+        price: getEffectivePrice(item.product),
         size: item.size,
       })),
       paymentMethod: paymentMethod || "cash",
@@ -122,10 +124,10 @@ export const createOrder = async (req, res, next) => {
       subtotal, discount, shippingFee, total,
       coupon: cart.appliedCoupon || null,
       secretCode,
-    }], { session });
+    }]);
 
-    await Cart.findByIdAndDelete(cart._id).session(session);
-    await session.commitTransaction();
+    await Cart.findByIdAndDelete(cart._id);
+    await order.save();
 
     (async () => {
       try {
@@ -152,69 +154,29 @@ export const createOrder = async (req, res, next) => {
 
     res.status(201).json({ status: "success", message: "تم إنشاء الطلب بنجاح", data: order });
   } catch (error) {
-    await session.abortTransaction();
     next(error);
-  } finally {
-    session.endSession();
   }
 };
 
 export const orderComplete = async (req, res, next) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
+
 
   try {
     const { id, code } = req.body;
 
     const order = await Order.findOneAndUpdate(
       { _id: id, secretCode: code, payoutProcessed: false },
-      { $set: { deliveryStatus: 'delivered', paymentStatus: 'paid', deliveredAt: new Date(), payoutProcessed: true, payoutDate: new Date() } },
-      { new: true, session }
+      { $set: { deliveryStatus: 'delivered', paymentStatus: 'paid', deliveredAt: new Date() } },
+      { new: true }
     ).populate('items.seller');
 
-    if (!order) throw createError("الطلب غير موجود أو تم تحصيل أرباحه مسبقاً", 400);
+    if (!order) throw new createError("الطلب غير موجود أو تم تحصيله مسبقاً", 400);
 
-    const sellerEarningsMap = {};
-    const getPlatformFeePercentage = (price) => {
-      if (price < 300) return 0.18;
-      if (price <= 799) return 0.15;
-      if (price <= 1999) return 0.12;
-      return 0.10;
-    };
-
-    order.items.forEach((item) => {
-      const sellerId = item.seller._id.toString();
-      const itemTotal = item.price * item.quantity;
-      const earnings = itemTotal * (1 - getPlatformFeePercentage(itemTotal));
-      if (!sellerEarningsMap[sellerId]) sellerEarningsMap[sellerId] = 0;
-      sellerEarningsMap[sellerId] += earnings;
-    });
-
-    const sellerIds = Object.keys(sellerEarningsMap);
-    for (const sellerId of sellerIds) {
-      await User.findByIdAndUpdate(
-        sellerId,
-        {
-          $inc: { 'wallet.pendingBalance': sellerEarningsMap[sellerId] },
-          $set: { 'wallet.lastTransaction': { amount: sellerEarningsMap[sellerId], date: new Date(), orderId: order._id } }
-        },
-        { session }
-      );
-    }
-
-    await session.commitTransaction();
+    await order.save();
 
     (async () => {
       try {
         const io = req.app.get("io");
-        for (const sellerId of sellerIds) {
-          await createNotifications({
-            io, title: '💵 أرباح جديدة',
-            message: `إضافة ${sellerEarningsMap[sellerId].toFixed(2)} جنيه لمحفظتك من الطلب #${order._id.toString().slice(-6)}`,
-            type: 'PAYOUT_COMPLETED', actor: req.user._id, userId: [sellerId],
-            data: { orderId: order._id }, link: `/seller/wallet`,
-          });
-        }
         await createNotifications({
           io, title: '📦 تم تسليم الطلب',
           message: `تم تسليم طلبك بنجاح!`,
@@ -226,23 +188,20 @@ export const orderComplete = async (req, res, next) => {
 
     res.status(200).json({ message: 'تم استكمال الطلب بنجاح' });
   } catch (err) {
-    await session.abortTransaction();
-    next(err);
-  } finally {
-    session.endSession();
+    console.error("Notification Error:", err);
   }
 };
 
 export const updatePayment = async (req, res, next) => {
   try {
-    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw createError("صلاحيات غير كافية", 403);
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw new createError("صلاحيات غير كافية", 403);
 
     const { orderId, paymentStatus } = req.body;
-    if (!isValidObjectId(orderId)) throw createError("ID غير صالح", 400);
-    if (!['pending', 'paid', 'failed'].includes(paymentStatus)) throw createError("حالة دفع غير صالحة", 400);
+    if (!isValidObjectId(orderId)) throw new createError("ID غير صالح", 400);
+    if (!['pending', 'paid', 'failed'].includes(paymentStatus)) throw new createError("حالة دفع غير صالحة", 400);
 
     const order = await Order.findById(orderId);
-    if (!order) throw createError("الطلب غير موجود", 404);
+    if (!order) throw new createError("الطلب غير موجود", 404);
 
     const previousStatus = order.paymentStatus;
     order.paymentStatus = paymentStatus;
@@ -269,11 +228,11 @@ export const updatePayment = async (req, res, next) => {
 
 export const updateDeliveryStatus = async (req, res, next) => {
   try {
-    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw createError("صلاحيات غير كافية", 403);
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw new createError("صلاحيات غير كافية", 403);
     const { id, deliveryStatus } = req.body;
     const order = await Order.findById(id);
 
-    if (!order) throw createError("الطلب غير موجود", 404);
+    if (!order) throw new createError("الطلب غير موجود", 404);
 
     order.deliveryStatus = deliveryStatus;
     await order.save();
@@ -300,11 +259,11 @@ export const confirmItemPreparation = async (req, res, next) => {
     const { orderId, itemId } = req.params;
 
     const order = await Order.findOne({ _id: orderId, "items.seller": req.user._id });
-    if (!order) throw createError("الطلب غير موجود", 404);
+    if (!order) throw new createError("الطلب غير موجود", 404);
 
     const item = order.items.find((it) => it._id.toString() === itemId && (it.seller?._id || it.seller).toString() === sellerId);
-    if (!item) throw createError("المنتج غير موجود أو لا تملك صلاحية عليه", 403);
-    if (item.isPrepared) throw createError("المنتج مجهز مسبقاً", 400);
+    if (!item) throw new createError("المنتج غير موجود أو لا تملك صلاحية عليه", 403);
+    if (item.isPrepared) throw new createError("المنتج مجهز مسبقاً", 400);
 
     item.isPrepared = true;
     order.isPrepared = order.items.every((it) => it.isPrepared);
@@ -319,7 +278,7 @@ export const confirmPreparation = async (req, res, next) => {
     const sellerId = req.user._id.toString();
     const order = await Order.findOne({ _id: req.params.id, "items.seller": req.user._id });
 
-    if (!order) throw createError("الطلب غير موجود", 404);
+    if (!order) throw new createError("الطلب غير موجود", 404);
 
     const sellerItems = order.items.filter((it) => (it.seller?._id || it.seller).toString() === sellerId);
     let anyUpdated = false;
@@ -417,7 +376,7 @@ export const getSellerOrders = async (req, res, next) => {
 
     const total = await Order.countDocuments(filter);
     const orders = await Order.find(filter)
-      .select('-secretCode -discount -payoutProcessed')
+      .select('-secretCode -discount -payoutProcessed -deliveryInfo')
       .populate('items.product', 'title titleEn images')
       .sort(sortObj)
       .skip(skip)
@@ -458,12 +417,12 @@ export const getUserOrderById = async (req, res, next) => {
       .populate('buyer', 'firstName lastName email phone')
       .populate({ path: 'items.product', select: 'title titleEn images' }).lean();
 
-    if (!order) throw createError('الطلب غير موجود', 404);
+    if (!order) throw new createError('الطلب غير موجود', 404);
 
     const isBuyer = order.buyer?._id?.toString() === userId;
     const isSeller = order.items.some(item => (item.seller?._id || item.seller)?.toString() === userId);
 
-    if (!isBuyer && !isSeller && req.user.role !== 'admin') throw createError('غير مصرح', 403);
+    if (!isBuyer && !isSeller && req.user.role !== 'admin') throw new createError('غير مصرح', 403);
 
     if (isSeller && !isBuyer && req.user.role !== 'admin') {
       order.items = order.items.filter(item => (item.seller?._id || item.seller)?.toString() === userId);
@@ -482,12 +441,12 @@ export const printInvoice = async (req, res, next) => {
       .populate('buyer', 'firstName lastName email phone')
       .populate({ path: 'items.product', select: 'title titleEn images' }).lean();
 
-    if (!order) throw createError('الطلب غير موجود', 404);
+    if (!order) throw new createError('الطلب غير موجود', 404);
 
     const isBuyer = order.buyer?._id?.toString() === userId;
     const isSeller = order.items.some(item => (item.seller?._id || item.seller)?.toString() === userId);
 
-    if (!isBuyer && !isSeller && req.user.role !== 'admin') throw createError('غير مصرح', 403);
+    if (!isBuyer && !isSeller && req.user.role !== 'admin') throw new createError('غير مصرح', 403);
 
     let invoiceItems = order.items;
     if (isSeller && !isBuyer && req.user.role !== 'admin') {
@@ -527,4 +486,57 @@ export const cashingOrder = async (req, res, next) => {
   // هذه الدالة تم تكرار غرضها في createOrder أعلاه، إذا كنت تحتاجها لتدفق مختلف استخدم نفس نموذج הـ Transactions.
   // تم تحجيمها هنا للحفاظ على التوافقية إن استدعت الحاجة.
   res.status(400).json({ message: "يرجى استخدام مسار إنشاء الطلب الأساسي (createOrder)" });
+};
+
+export const processOrderPayout = async (req, res, next) => {
+  try {
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw new createError("صلاحيات غير كافية", 403);
+
+    const { orderId, amount } = req.body;
+    if (!isValidObjectId(orderId)) throw new createError("ID غير صالح", 400);
+    if (!amount || amount <= 0) throw new createError("المبلغ غير صالح", 400);
+
+    const order = await Order.findById(orderId).populate('items.seller');
+    if (!order) throw new createError("الطلب غير موجود", 404);
+    if (order.payoutProcessed) throw new createError("تم تحصيل هذا الطلب مسبقاً", 400);
+
+    const sellerEarningsMap = {};
+    order.items.forEach((item) => {
+      const sellerId = item.seller._id.toString();
+      const itemTotal = item.price * item.quantity;
+      if (!sellerEarningsMap[sellerId]) sellerEarningsMap[sellerId] = 0;
+      sellerEarningsMap[sellerId] += itemTotal;
+    });
+
+    const sellerIds = Object.keys(sellerEarningsMap);
+    for (const sellerId of sellerIds) {
+      await User.findByIdAndUpdate(
+        sellerId,
+        {
+          $inc: { 'wallet.pendingBalance': amount },
+          $set: { 'wallet.lastTransaction': { amount, date: new Date(), orderId: order._id } }
+        },
+      );
+    }
+
+    order.payoutProcessed = true;
+    order.payoutDate = new Date();
+    await order.save();
+
+    (async () => {
+      try {
+        const io = req.app.get("io");
+        for (const sellerId of sellerIds) {
+          await createNotifications({
+            io, title: '💵 أرباح جديدة',
+            message: `إضافة ${amount.toFixed(2)} جنيه لمحفظتك من الطلب #${order._id.toString().slice(-6)}`,
+            type: 'PAYOUT_COMPLETED', actor: req.user._id, userId: [sellerId],
+            data: { orderId: order._id }, link: `/seller/wallet`,
+          });
+        }
+      } catch (err) { console.error("Notification Error:", err); }
+    })();
+
+    res.status(200).json({ message: 'تم تحصيل الطلب بنجاح' });
+  } catch (error) { next(error); }
 };

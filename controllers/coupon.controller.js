@@ -95,7 +95,7 @@ export const validateCouponCode = async (req, res, next) => {
         const cart = await Cart.findOne({ user: req.user._id }).populate('items.product');
         if (!cart || !cart.items || cart.items.length === 0) throw createError("السلة فارغة", 400);
 
-        const cartTotal = cart.items.reduce((total, item) => total + (item.product.price * item.quantity), 0);
+        const cartTotal = cart.items.reduce((total, item) => total + ((item.product.discountedPrice ?? item.product.price) * item.quantity), 0);
         if (cartTotal <= 0) throw createError("إجمالي السلة غير صالح", 400);
 
         const coupon = await Coupon.findOne({
@@ -137,7 +137,7 @@ export const removeCouponFromCart = async (req, res, next) => {
         if (!cart.appliedCoupon) throw createError("لا يوجد كوبون مطبق", 400);
 
         const removedCoupon = cart.appliedCoupon;
-        const originalSubtotal = cart.items.reduce((total, item) => total + (item.product.price * item.quantity), 0);
+        const originalSubtotal = cart.items.reduce((total, item) => total + ((item.product.discountedPrice ?? item.product.price) * item.quantity), 0);
 
         cart.appliedCoupon = undefined;
         cart.total = originalSubtotal;

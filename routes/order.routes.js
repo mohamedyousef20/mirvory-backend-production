@@ -4,7 +4,7 @@ import { getAdminOrders, getSellerOrders,
       updatePayment, cashingOrder,
       createOrder, confirmPreparation, confirmItemPreparation,
       createOrderFilterObj, updateDeliveryStatus,
-      getUserOrderById, getUserOrders, printInvoice } from '../controllers/order.controller.js';
+      getUserOrderById, getUserOrders, printInvoice, processOrderPayout } from '../controllers/order.controller.js';
 import { isAdmin, isSeller, protect } from '../middlewares/auth.js';
 import { paginate } from '../middlewares/pagination.js';
 import { sort } from '../middlewares/sort.js';
@@ -14,6 +14,7 @@ const router = express.Router();
 router.use(protect);
 
 router.post('/complete',isAdmin, orderComplete);
+router.post('/process-payout', isAdmin, processOrderPayout);
 router.get('/', paginate(12), sort({ createdAt: -1 }), buildFilter(commonFilters.order), getUserOrders);
 router.get("/admin/all", isAdmin, paginate(12), sort({ createdAt: -1 }), buildFilter(commonFilters.order), search(['orderNumber']), getAdminOrders);
 router.get('/seller', isSeller, paginate(12), sort({ createdAt: -1 }), buildFilter(commonFilters.order), search(['orderNumber']), getSellerOrders);

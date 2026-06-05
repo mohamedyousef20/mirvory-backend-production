@@ -26,6 +26,9 @@ const announcementSchema = new mongoose.Schema({
         type: Date,
         required: true
     },
+    link: {
+        type: String,
+    },
     status: {
         type: String,
         enum: ['active', 'inactive'],

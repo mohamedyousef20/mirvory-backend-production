@@ -75,7 +75,6 @@ export const getSellerForAdmin = async (req, res, next) => {
 
     const total = await User.countDocuments(filter);
     const sellers = await User.find(filter)
-      .select("_id firstName lastName email phone role isActive isVerified createdAt")
       .sort(sortObj)
       .skip(skip)
       .limit(limit)
@@ -94,8 +93,11 @@ export const getUsersForAdmin = async (req, res, next) => {
     const filterObj = req.filter || {};
     const searchFilter = req.searchFilter || {};
 
-    const filter = { role: 'user', ...filterObj, ...searchFilter };
-
+    const filter = {
+      ...filterObj,
+      ...searchFilter,
+      role: 'user'
+    };
     const total = await User.countDocuments(filter);
     const users = await User.find(filter)
       .select('firstName lastName email phone role isActive isVerified address createdAt updatedAt')
@@ -103,7 +105,7 @@ export const getUsersForAdmin = async (req, res, next) => {
       .skip(skip)
       .limit(limit)
       .lean();
-
+    console.log(total,'user147')
     res.status(200).json(formatPaginationResponse(users, total, req.pagination));
   } catch (error) {
     next(new createError(error.message, 500));
@@ -115,7 +117,7 @@ export const getUsersForAdmin = async (req, res, next) => {
 // ==========================================
 export const register = async (req, res, next) => {
   try {
-    const { firstName, lastName, email, password, phone, address, role } = req.body;
+    const { firstName, lastName, email, password, phone, address, role, vendorProfile } = req.body;
 
     const existingUser = await User.findOne({ email });
     if (existingUser) return next(new createError("هذا البريد الإلكتروني مسجل مسبقاً", 400));
@@ -124,10 +126,15 @@ export const register = async (req, res, next) => {
     const hashedCode = await bcrypt.hash(verificationCode, 10);
 
     const user = new User({
-      firstName, lastName, email, phone, password,
+      firstName, 
+      lastName, 
+      email, 
+      phone,
+       password,
       role: role || "user",
       address,
       verificationCode: hashedCode,
+      vendorProfile: role === "seller" ? vendorProfile : undefined,
       verificationCodeExpiresAt: Date.now() + 30 * 60 * 1000
     });
 
@@ -536,7 +543,7 @@ export const getSellerBalance = async (req, res, next) => {
 // ==========================================
 export const updateVendorBalanceByAdmin = async (req, res, next) => {
   try {
-    if (req.user.role !== 'super_admin') return next(new createError("هذه الصلاحية متاحة فقط للسوبر أدمن", 403));
+    if (req.user.role !== 'admin') return next(new createError("هذه الصلاحية متاحة فقط للسوبر أدمن", 403));
 
     const { sellerId, balance, pendingBalance } = req.body;
     if (!isValidObjectId(sellerId)) return next(new createError("معرف البائع غير صالح", 400));

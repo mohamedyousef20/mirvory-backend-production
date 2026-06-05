@@ -57,51 +57,6 @@ const vendorSchema = new mongoose.Schema(
       },
     },
 
-    city: {
-      type: String,
-      required: [true, "City is required"],
-      enum: [
-        "cairo_downtown",
-        "garden_city",
-        "zamalek",
-        "abbasiya",
-        "shubra",
-        "matareya",
-        "ain_shams",
-        "heliopolis",
-        "nasr_city",
-        "new_cairo",
-        "dokki",
-        "mohandessin",
-        "giza",
-        "faisal",
-        "haram",
-        "6_october",
-        "shubra_kheima"
-      ],
-      trim: true
-    },
-
-    // Optional expansion
-    governorate: {
-      type: String,
-      default: "",
-      trim: true,
-    },
-
-    addressDetails: {
-      type: String,
-      default: "",
-      trim: true,
-      maxlength: 300,
-    },
-
-    // Store Details
-    description: {
-      type: String,
-      default: "",
-      maxlength: 1000,
-    },
 
     // Seller Performance
     rating: {
@@ -197,7 +152,7 @@ const walletSchema = new mongoose.Schema({
     type: { type: String, enum: ['deposit', 'withdrawal', 'sale'] },
     date: Date
   },
-  pendingBalance: { type: Number, default: 0 }
+  pendingBalance: { type: Number, default: 0 },
 });
 
 const userSchema = new mongoose.Schema({
@@ -337,3 +292,4 @@ userSchema.index({ 'vendorProfile.storeName': 'text' });
 userSchema.index({ role: 1, isActive: 1 });
 
 export default mongoose.model('User', userSchema);
+

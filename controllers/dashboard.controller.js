@@ -7,7 +7,7 @@ export const getSellerCounters = async (req, res) => {
   try {
     console.log('getSellerCounters called, user:', req.user);
     const sellerId = req.user._id;
-    
+
     // Get counts for seller's data
     const [
       totalOrders,
@@ -48,11 +48,11 @@ export const getSellerCounters = async (req, res) => {
 export const getSellerAnalytics = async (req, res) => {
   try {
     const sellerId = req.user._id;
-    
+
     // Get monthly sales data for the last 6 months
     const sixMonthsAgo = new Date();
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-    
+
     const monthlySales = await Order.aggregate([
       {
         $match: {
@@ -116,7 +116,7 @@ export const getSellerTransactions = async (req, res) => {
   try {
     const sellerId = req.user._id;
     const { page = 1, limit = 10 } = req.query;
-    
+
     const orders = await Order.find({ 'items.seller': sellerId })
       .populate('items.product', 'title images')
       .sort({ createdAt: -1 })
@@ -153,25 +153,109 @@ export const getAdminCounters = async (req, res) => {
       pendingProducts,
       totalRevenue,
       totalDiscounts,
-      totalCommissions
+      commissionStats
     ] = await Promise.all([
-      User.countDocuments(),
+      User.countDocuments({ role: 'user' }),
+
       User.countDocuments({ role: 'seller' }),
+
       Order.countDocuments(),
+
       Order.countDocuments({ deliveryStatus: 'pending' }),
+
       Product.countDocuments(),
+
       Product.countDocuments({ status: 'pending' }),
+
+      // إجمالي المبيعات
       Order.aggregate([
-        { $match: { paymentStatus: 'completed' } },
-        { $group: { _id: null, total: { $sum: '$total' } } }
+        { $match: { paymentStatus: 'paid' } },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: '$total' }
+          }
+        }
       ]),
+
+      // إجمالي الخصومات
       Order.aggregate([
-        { $match: { paymentStatus: 'completed', discount: { $exists: true, $gt: 0 } } },
-        { $group: { _id: null, total: { $sum: '$discount' } } }
+        {
+          $match: {
+            paymentStatus: 'paid',
+            discount: { $exists: true, $gt: 0 }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: '$discount' }
+          }
+        }
       ]),
+
+      // إحصائيات العمولات والشحن
       Order.aggregate([
-        { $match: { paymentStatus: 'completed' } },
-        { $group: { _id: null, total: { $sum: { $multiply: ['$total', 0.10] } } } }
+        {
+          $match: {
+            paymentStatus: 'paid'
+          }
+        },
+        {
+          $project: {
+            subtotal: 1,
+            shippingFee: 1,
+
+            feeRate: {
+              $switch: {
+                branches: [
+                  {
+                    case: { $lt: ['$subtotal', 300] },
+                    then: 0.18
+                  },
+                  {
+                    case: {
+                      $and: [
+                        { $gte: ['$subtotal', 300] },
+                        { $lte: ['$subtotal', 799] }
+                      ]
+                    },
+                    then: 0.15
+                  },
+                  {
+                    case: {
+                      $and: [
+                        { $gte: ['$subtotal', 800] },
+                        { $lte: ['$subtotal', 1999] }
+                      ]
+                    },
+                    then: 0.12
+                  }
+                ],
+                default: 0.10
+              }
+            }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+
+            totalCommission: {
+              $sum: {
+                $multiply: ['$subtotal', '$feeRate']
+              }
+            },
+
+            totalProductsRevenue: {
+              $sum: '$subtotal'
+            },
+
+            totalShippingRevenue: {
+              $sum: '$shippingFee'
+            }
+          }
+        }
       ])
     ]);
 
@@ -184,15 +268,32 @@ export const getAdminCounters = async (req, res) => {
         pendingOrders,
         totalProducts,
         pendingProducts,
+
         totalRevenue: totalRevenue[0]?.total || 0,
+
         totalDiscounts: totalDiscounts[0]?.total || 0,
-        totalCommissions: totalCommissions[0]?.total || 0,
-        totalProfits: totalCommissions[0]?.total || 0
+
+        totalCommissions:
+          commissionStats[0]?.totalCommission || 0,
+
+        totalProfits:
+          commissionStats[0]?.totalCommission || 0,
+
+        totalShippingRevenue:
+          commissionStats[0]?.totalShippingRevenue || 0,
+
+        totalProductsRevenue:
+          commissionStats[0]?.totalProductsRevenue || 0
       }
     });
+
   } catch (error) {
     console.error('Get admin counters error:', error);
-    res.status(500).json({ message: 'Server error' });
+
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
   }
 };
 
@@ -201,7 +302,7 @@ export const getAdminAnalytics = async (req, res) => {
     // Get monthly revenue for the last 6 months
     const sixMonthsAgo = new Date();
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-    
+
     const monthlyRevenue = await Order.aggregate([
       {
         $match: {
@@ -257,7 +358,7 @@ export const getAdminAnalytics = async (req, res) => {
 export const getAdminTransactions = async (req, res) => {
   try {
     const { page = 1, limit = 10 } = req.query;
-    
+
     const orders = await Order.find({})
       .populate('buyer', 'firstName lastName email')
       .sort({ createdAt: -1 })

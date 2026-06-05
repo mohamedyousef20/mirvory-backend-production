@@ -17,6 +17,7 @@ const productSchema = new mongoose.Schema({
   isApproved: { type: Boolean, default: false },
   category: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
   isFeatured: { type: Boolean, default: false },
+  isTrusted: { type: Boolean, default: false },
   brand: { type: String, default: '' },
   tags: [{ type: String }],
   ratings: {

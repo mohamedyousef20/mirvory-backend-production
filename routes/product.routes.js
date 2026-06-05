@@ -10,7 +10,8 @@ import {
   getNewArrivals,
   getSellerProducts,
   deleteProduct,
-  updateProduct
+  updateProduct,
+  trustProduct
 } from '../controllers/product.controller.js';
 import {
   createRating,
@@ -38,11 +39,12 @@ const router = express.Router({ mergeParams: true });
 router.get('/admin-products', protect, isAdmin, paginate(12), sort(), buildFilter(commonFilters.product),  getProductsForAdmin);
 router.patch('/approve', protect, isAdmin, approveProduct);
 router.patch('/reject', protect, isAdmin, rejectProduct);
+router.patch('/trust', protect, isAdmin, trustProduct);
 
 // مسارات البائع
 router.get('/seller/products', protect, isSeller, paginate(12), sort(), buildFilter(commonFilters.product), getSellerProducts);
-router.delete('/:id', protect, isSeller, deleteProduct);
-router.patch('/:id', protect, isSeller, updateProduct);
+router.delete('/', protect, isSeller, deleteProduct);
+router.patch('/', protect, isSeller, updateProduct);
 
 // مسارات عامة
 // Advanced search endpoint
