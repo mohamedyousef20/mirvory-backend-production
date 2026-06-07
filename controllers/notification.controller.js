@@ -11,11 +11,12 @@ export const getNotifications = async (req, res, next) => {
     const userId = req.user._id;
     const role = req.user.role;
 
+    // 🔒 ROLE ISOLATION FIX: Only return notifications specifically for this user
+    // OR true broadcast notifications (no userId, type: ALL_USERS)
     const notifications = await Notification.find({
       $or: [
-        { userId },
-        { role, userId: { $exists: false } },
-        { type: 'ALL_USERS', userId: { $exists: false } }
+        { userId }, // Notifications specifically for this user
+        { type: 'ALL_USERS', userId: { $exists: false } } // True broadcasts for all users
       ]
     }).sort({ createdAt: -1 }).lean();
 
@@ -27,7 +28,6 @@ export const markAsRead = async (req, res, next) => {
   try {
     const { id } = req.body;
     if (!isValidObjectId(id)) throw createError("المعرف غير صالح", 400);
-console.log(id,'ids147')
     const notification = await Notification.findByIdAndUpdate(
       id,
       {
@@ -36,7 +36,6 @@ console.log(id,'ids147')
       },
       { new: true }
     );
-    console.log(notification,'ids148')
     if (!notification) throw createError('الإشعار غير موجود', 404);
     res.json({ success: true, notification });
   } catch (error) { next(error); }
@@ -54,8 +53,13 @@ export const markAllAsRead = async (req, res, next) => {
 
 export const getUnreadCount = async (req, res, next) => {
   try {
+    // 🔒 ROLE ISOLATION FIX: Only count notifications specifically for this user
+    // OR true broadcast notifications (no userId, type: ALL_USERS)
     const count = await Notification.countDocuments({
-      $or: [{ userId: req.user._id, seen: false }, { role: req.user.role, seen: false }, { type: 'ALL_USERS', seen: false }],
+      $or: [
+        { userId: req.user._id, seen: false },
+        { type: 'ALL_USERS', userId: { $exists: false }, seen: false }
+      ]
     });
     res.json({ success: true, count });
   } catch (error) { next(error); }

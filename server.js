@@ -7,6 +7,7 @@ import cookieParser from "cookie-parser";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import jwt from "jsonwebtoken";
+import rateLimit from "express-rate-limit";
 import connectDB from "./config/db.js";
 import mountRoutes from "./routes/index.route.js";
 import User from "./models/user.model.js";
@@ -16,11 +17,28 @@ dotenv.config({ path: "./.env" });
 
 const app = express();
 
+// 🛡️ RATE LIMITING: Protect against DoS and brute force attacks
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 1000, // limit each IP to 1000 requests per windowMs (increased for development)
+  message: { message: "Too many requests from this IP, please try again later." },
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // limit each IP to 20 login attempts per windowMs (increased for development)
+  message: { message: "Too many login attempts, please try again later." },
+  skipSuccessfulRequests: true,
+});
+
 app.use(cors({
   origin: "http://localhost:3000",
   credentials: true,
 }));
 app.use(morgan("dev"));
+app.use(limiter); 
 app.use(express.json());
 app.use(cookieParser());
 
@@ -79,6 +97,21 @@ io.on("connection", (socket) => {
 
 mountRoutes(app);
 
+// Global Error Handler
+app.use((err, req, res, next) => {
+  console.error("ERROR:", err);
+
+  const statusCode = err.statusCode || err.status || 500;
+
+  res.status(statusCode).json({
+    success: false,
+    message: err.message || "حدث خطأ غير متوقع",
+    status: statusCode,
+    ...(process.env.NODE_ENV === "development" && {
+      stack: err.stack,
+    }),
+  });
+});
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

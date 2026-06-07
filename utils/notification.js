@@ -26,9 +26,11 @@ export const createNotifications = async ({
         recipients = await User.find({}).select("_id role");
     }
 
+    // 🔒 ROLE ISOLATION FIX: Only set userId for individual notifications
+    // Don't set role field for individual notifications to prevent cross-role leakage
     const docs = recipients.map((user) => ({
         userId: user._id,
-        role: user.role,
+        role: undefined, // 🔒 Remove role field to prevent cross-role leakage
         actor,
         title,
         message,

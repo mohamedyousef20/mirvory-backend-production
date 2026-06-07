@@ -1,5 +1,5 @@
 import express from 'express';
-import { register, login, verifyEmail, forgetPassword, verifyResetCode, resetPassword, updateProfile, getSellerBalance, getSellerForAdmin, getUsersForAdmin, searchUsersForAdmin, searchUsers, resendVerification, changeUserPassword, getMe, refreshToken, logout, updateVendorBalanceByAdmin, updateVendorStatusByAdmin, toggleUserActiveStatus, permanentlyDeleteUser } from '../controllers/user.controller.js';
+import { register, login, verifyEmail, forgetPassword, verifyResetCode, resetPassword, updateProfile, getSellerBalance, getSellerForAdmin, getUsersForAdmin, searchUsersForAdmin, searchUsers, resendVerification, changeUserPassword, getMe, refreshToken, logout, updateVendorBalanceByAdmin, updateVendorStatusByAdmin, toggleUserActiveStatus, permanentlyDeleteUser, googleAuth, setSocialCookies } from '../controllers/user.controller.js';
 import { getSellerOrders } from '../controllers/order.controller.js';
 import { protect, isSeller, isAdmin } from '../middlewares/auth.js';
 import { registerUserValid } from '../validations/user/registerUserValid.js'
@@ -12,16 +12,19 @@ import { search, buildFilter, commonFilters } from '../middlewares/search.js';
 
 const router = express.Router();
 
-router.post('/register',registerUserValid,register);
+// Public routes
+router.post('/register', registerUserValid, register);
 router.post('/login', loginUserValid, login);
 router.post('/auth/login', loginUserValid, login);
+router.post('/auth/google', googleAuth);
+router.post('/auth/social-set-cookies', setSocialCookies);
 router.post('/refresh-token', refreshToken);
 router.post('/logout', logout);
 router.get('/test-auth', protect, (req, res) => {
-  res.json({ 
-    success: true, 
+  res.json({
+    success: true,
     message: 'Authentication working',
-    user: req.user 
+    user: req.user
   });
 });
 router.post('/verify-email', verifyEmailValid, verifyEmail);

@@ -50,15 +50,15 @@ export const createProduct = async (req, res, next) => {
     const discountAmount = price * (discountPercentage / 100);
     const discountedPrice = price - discountAmount;
 
-    let multiplier = 0.90;  
+    let multiplier = 0.90;
     if (!discountedPrice || discountedPrice <= 0) {
       multiplier = 0.90;
     } else if (discountedPrice < 300) {
-      multiplier = 0.82; 
+      multiplier = 0.82;
     } else if (discountedPrice >= 300 && discountedPrice <= 799) {
       multiplier = 0.85;
     } else if (discountedPrice >= 800 && discountedPrice <= 1999) {
-      multiplier = 0.88; 
+      multiplier = 0.88;
     }
 
     const sellerPercentage = discountedPrice * multiplier;
@@ -74,7 +74,7 @@ export const createProduct = async (req, res, next) => {
       discountPercentage,
       discountedPrice,
       category: productData.category,
-      status: 'pending', 
+      status: 'pending',
       isApproved: false,
       sellerPercentage,
       isFeatured: productData.isFeatured === 'true' || productData.isFeatured === true,
@@ -94,7 +94,9 @@ export const createProduct = async (req, res, next) => {
           await createNotifications({
             io, title: '📦 منتج جديد للمراجعة',
             message: `تم إضافة منتج جديد "${product.title}" بواسطة ${product.seller.firstName}`,
-            type: 'PRODUCT_SUBMITTED', actor: req.user._id, userIds: adminUsers.map(a => a._id.toString()), // ✅ تم إصلاح userId لـ userIds
+            type: 'PRODUCT_SUBMITTED',
+            actor: req.user._id,
+            userIds: adminUsers.map(a => a._id.toString()),
             data: { productId: product._id }, link: `/products/${product._id}`,
           });
         }
@@ -110,7 +112,7 @@ export const createProduct = async (req, res, next) => {
 
 export const updateProduct = async (req, res, next) => {
   try {
-    console.log(req.body,'458')
+    console.log(req.body, '458')
     const { id, ...updates } = req.body;
     if (!isValidObjectId(id)) throw new createError("معرف المنتج غير صالح", 400);
 
@@ -335,9 +337,9 @@ export const getProducts = async (req, res, next) => {
     const products = await Product.find(filter)
       .populate('seller', 'firstName lastName')
       .populate('category', 'name')
-    
-    console.log(products,'256')
-    console.log(total,'257')
+
+    console.log(products, '256')
+    console.log(total, '257')
     res.status(200).json(formatPaginationResponse(products, total, req.pagination));
   } catch (error) { next(error); }
 };

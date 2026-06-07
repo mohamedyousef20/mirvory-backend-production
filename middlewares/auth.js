@@ -12,6 +12,11 @@ export const protect = async (req, res, next) => {
     }
 
     if (!token) {
+      console.warn('AUTH_WARNING: No token provided', {
+        path: req.path,
+        method: req.method,
+        ip: req.ip
+      });
       return res.status(401).json({ message: 'الرجاء تسجيل الدخول، الوصول غير مصرح' });
     }
 
@@ -19,11 +24,31 @@ export const protect = async (req, res, next) => {
     req.user = await User.findById(decoded.id).select('-password'); // جلب البيانات بدون كلمة المرور
 
     if (!req.user) {
+      console.warn('AUTH_WARNING: User not found for token', {
+        userId: decoded.id,
+        path: req.path
+      });
       return res.status(401).json({ message: 'المستخدم غير موجود' });
+    }
+
+    // 🚨 SECURITY: Check if user is active
+    if (!req.user.isActive) {
+      console.warn('AUTH_WARNING: Inactive user attempted access', {
+        userId: req.user._id,
+        email: req.user.email,
+        path: req.path
+      });
+      return res.status(403).json({ message: 'هذا الحساب موقوف، يرجى التواصل مع الإدارة' });
     }
 
     next();
   } catch (error) {
+    console.error('AUTH_ERROR: Token verification failed', {
+      error: error.message,
+      code: error.code,
+      path: req.path,
+      ip: req.ip
+    });
     return res.status(401).json({ message: 'توكن غير صالح أو منتهي الصلاحية' });
   }
 };

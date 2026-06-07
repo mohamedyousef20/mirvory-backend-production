@@ -23,7 +23,19 @@ export const addToCart = asyncHandler(async (req, res, next) => {
 
   const product = await Product.findById(productId).lean();
   if (!product) return next(new createError("المنتج غير موجود", 404));
+  if (!product.isApproved) {
+    return next(new createError("هذا المنتج غير متاح للشراء حالياً", 400));
+  }
 
+  // المنتج يجب أن يكون متاحًا
+  if (product.status !== "available") {
+    return next(new createError("هذا المنتج غير متاح للشراء حالياً", 400));
+  }
+
+  // البائع لا يمكنه شراء منتجاته
+  if (product.seller.toString() === req.user._id.toString()) {
+    return next(new createError("لا يمكنك إضافة منتجاتك إلى سلة التسوق", 403));
+  }
   let cart = await Cart.findOneAndUpdate(
     { user: req.user._id },
     { $setOnInsert: { user: req.user._id, items: [] } },

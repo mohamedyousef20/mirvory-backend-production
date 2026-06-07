@@ -190,18 +190,15 @@ export const login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) return next(new createError("البريد وكلمة المرور مطلوبة", 400));
-    console.log(password,'147ss')
+
     const user = await User.findOne({ email }).select('+password');
     if (!user) return next(new createError("بيانات الدخول غير صحيحة", 401));
-    console.log(user, '147sss')
 
     // 🚨 SECURITY: Prevent login for suspended or unverified users
     if (!user.isActive) return next(new createError("هذا الحساب موقوف، يرجى التواصل مع الإدارة", 403));
     // if (!user.isVerified) return next(new createError("يرجى تفعيل بريدك الإلكتروني أولاً", 403));
 
     const isMatch = await bcrypt.compare(password, user.password);
-    console.log(isMatch, '147ssss')
-
     if (!isMatch) return next(new createError("بيانات الدخول غير صحيحة", 401));
 
     const token = jwt.sign(
@@ -211,32 +208,69 @@ export const login = async (req, res, next) => {
     );
 
     const refreshToken = jwt.sign(
-      { id: user._id },
+      { id: user._id, version: Date.now() },
       process.env.REFRESH_SECRET,
       { expiresIn: "7d" }
     );
 
+    // 🔄 TOKEN ROTATION: Store refresh token in user document
+    const refreshTokenExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    user.refreshTokens = user.refreshTokens || [];
+    user.refreshTokens.push({
+      token: refreshToken,
+      createdAt: new Date(),
+      expiresAt: refreshTokenExpiry
+    });
+
+    // 🧹 CLEANUP: Remove expired refresh tokens (keep max 5)
+    user.refreshTokens = user.refreshTokens.filter(rt => rt.expiresAt > new Date());
+    if (user.refreshTokens.length > 5) {
+      user.refreshTokens = user.refreshTokens.slice(-5);
+    }
+
+    await user.save({ validateModifiedOnly: true });
+
+    // 🍪 SECURE COOKIES: Production-ready configuration
+    const isProduction = process.env.NODE_ENV === "production";
     res.cookie("accessToken", token, {
-      httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", maxAge: 24 * 60 * 60 * 1000
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "strict" : "lax",
+      maxAge: 24 * 60 * 60 * 1000,
+      path: '/'
     });
 
     res.cookie("refreshToken", refreshToken, {
-      httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", maxAge: 7 * 24 * 60 * 60 * 1000
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "strict" : "lax",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      path: '/'
     });
 
     res.status(200).json({ success: true, data: { user: { id: user._id, role: user.role } } });
   } catch (error) {
-    console.log('Login Error ', error)
+    console.error('Login Error:', error);
     next(new createError(error.message, 500));
   }
 };
 
 export const logout = async (req, res, next) => {
   try {
-    res.cookie('token', '', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', expires: new Date(0) });
-    res.cookie('accessToken', '', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', expires: new Date(0) });
-    res.cookie('refreshToken', '', { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', expires: new Date(0) });
-    res.cookie('role', '', { expires: new Date(0) });
+    const refreshToken = req.cookies.refreshToken;
+    
+    // 🧹 CLEAR REFRESH TOKEN: Remove from user document if exists
+    if (refreshToken && req.user?._id) {
+      await User.findByIdAndUpdate(req.user._id, {
+        $pull: { refreshTokens: { token: refreshToken } }
+      });
+    }
+
+    const isProduction = process.env.NODE_ENV === "production";
+    res.cookie('token', '', { httpOnly: true, secure: isProduction, sameSite: 'strict', expires: new Date(0), path: '/' });
+    res.cookie('accessToken', '', { httpOnly: true, secure: isProduction, sameSite: isProduction ? 'strict' : 'lax', expires: new Date(0), path: '/' });
+    res.cookie('refreshToken', '', { httpOnly: true, secure: isProduction, sameSite: isProduction ? 'strict' : 'lax', expires: new Date(0), path: '/' });
+    res.cookie('role', '', { expires: new Date(0), path: '/' });
 
     res.status(200).json({ success: true, message: "تم تسجيل الخروج بنجاح" });
   } catch (error) {
@@ -251,23 +285,74 @@ export const refreshToken = async (req, res, next) => {
     if (!refreshToken) return next(new createError("No refresh token", 401));
 
     const decoded = jwt.verify(refreshToken, process.env.REFRESH_SECRET);
-    const user = await User.findById(decoded.id);
+    const user = await User.findById(decoded.id).select('+refreshTokens');
+    
     if (!user || !user.isActive) return next(new createError("المستخدم غير موجود أو موقوف", 401));
 
+    // 🔐 VERIFY TOKEN: Check if refresh token exists in user's stored tokens
+    const storedToken = user.refreshTokens?.find(rt => rt.token === refreshToken);
+    if (!storedToken) {
+      return next(new createError("Invalid refresh token", 401));
+    }
+
+    // 🧹 CLEANUP: Remove expired tokens
+    user.refreshTokens = user.refreshTokens?.filter(rt => rt.expiresAt > new Date()) || [];
+
+    // 🔄 TOKEN ROTATION: Generate new tokens
     const newAccessToken = jwt.sign(
       { id: user._id, role: user.role },
       process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRE }
+      { expiresIn: process.env.JWT_EXPIRE || "1d" }
     );
 
-    res.cookie("accessToken", newAccessToken, {
-      httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", maxAge: 24 * 60 * 60 * 1000
+    const newRefreshToken = jwt.sign(
+      { id: user._id, version: Date.now() },
+      process.env.REFRESH_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    // 🔄 ROTATION: Remove old token and add new one
+    user.refreshTokens = user.refreshTokens.filter(rt => rt.token !== refreshToken);
+    const newRefreshTokenExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    user.refreshTokens.push({
+      token: newRefreshToken,
+      createdAt: new Date(),
+      expiresAt: newRefreshTokenExpiry
     });
 
-    return res.status(200).json({ success: true });
+    // 🧹 LIMIT: Keep max 5 refresh tokens
+    if (user.refreshTokens.length > 5) {
+      user.refreshTokens = user.refreshTokens.slice(-5);
+    }
+
+    await user.save({ validateModifiedOnly: true });
+
+    // 🍪 SECURE COOKIES: Set new cookies
+    const isProduction = process.env.NODE_ENV === "production";
+    res.cookie("accessToken", newAccessToken, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "strict" : "lax",
+      maxAge: 24 * 60 * 60 * 1000,
+      path: '/'
+    });
+
+    res.cookie("refreshToken", newRefreshToken, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "strict" : "lax",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      path: '/'
+    });
+
+    // 🔄 Return new access token in response body for middleware auto-refresh
+    return res.status(200).json({ success: true, accessToken: newAccessToken });
   } catch (err) {
-    console.error(err);
-    next(new createError("Invalid refresh token", 401));
+    console.error("REFRESH_TOKEN_ERROR:", err);
+    if (err.name === 'TokenExpiredError' || err.name === 'JsonWebTokenError') {
+      return next(new createError("Invalid or expired refresh token", 401));
+    }
+    next(new createError("Token refresh failed", 401));
   }
 };
 
@@ -360,7 +445,9 @@ export const forgetPassword = async (req, res, next) => {
     if (!user) return next(new createError("لم نتمكن من العثور على حساب بهذا البريد", 404));
 
     const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-    const hashedCode = crypto.createHmac("sha256", process.env.JWT_SECRET).update(verificationCode).digest("hex");
+    // 🔐 Use separate RESET_SECRET for password reset codes (not JWT_SECRET)
+    const resetSecret = process.env.RESET_SECRET || process.env.JWT_SECRET;
+    const hashedCode = crypto.createHmac("sha256", resetSecret).update(verificationCode).digest("hex");
 
     user.passwordResetCode = hashedCode;
     user.passwordResetCodeExpiresAt = Date.now() + 5 * 60 * 1000;
@@ -390,12 +477,12 @@ export const verifyResetCode = async (req, res, next) => {
   try {
     const { code } = req.body;
 
+    // 🔐 Use separate RESET_SECRET for password reset codes (not JWT_SECRET)
+    const resetSecret = process.env.RESET_SECRET || process.env.JWT_SECRET;
     const hashedResetCode = crypto
-      .createHmac("sha256", process.env.JWT_SECRET)
+      .createHmac("sha256", resetSecret)
       .update(req.body.code)
       .digest("hex");
-    console.log(hashedResetCode, "hashedResetCode")
-    console.log(process.env.JWT_SECRET, "process.env.JWT_SECRET")
     // Find a user with a matching reset code that hasn't expired
     const user = await User.findOne({
       passwordResetCode: hashedResetCode,
@@ -689,5 +776,165 @@ export const permanentlyDeleteUser = async (req, res, next) => {
     res.status(200).json({ success: true, message: "تم إيقاف الحساب منطقياً للحفاظ على سلامة النظام والفواتير المرتبطة" });
   } catch (error) {
     next(new createError(error.message, 500));
+  }
+};
+
+// ==========================================
+// 🔐 GOOGLE OAUTH AUTHENTICATION
+// ==========================================
+export const googleAuth = async (req, res, next) => {
+  try {
+    const { email, firstName, lastName, googleId, avatar } = req.body;
+
+    if (!email || !googleId) {
+      return next(new createError("Email and Google ID are required", 400));
+    }
+
+    // Check if user exists
+    let user = await User.findOne({ email });
+
+    if (user) {
+      // Update existing user with Google info if not already linked
+      if (!user.googleId) {
+        user.googleId = googleId;
+        if (avatar) user.avatar = avatar;
+        await user.save({ validateModifiedOnly: true });
+      }
+
+      // Check if user is active
+      if (!user.isActive) {
+        return next(new createError("This account is suspended. Please contact support.", 403));
+      }
+    } else {
+      // Create new user
+      const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+      const hashedCode = await bcrypt.hash(verificationCode, 10);
+
+      user = new User({
+        firstName: firstName || 'Google',
+        lastName: lastName || 'User',
+        email,
+        password: await bcrypt.hash(Math.random().toString(36).slice(-8), 10), // Random password
+        googleId,
+        avatar: avatar || '',
+        role: 'user',
+        isVerified: true, // Auto-verify Google users
+        verificationCode: hashedCode,
+        verificationCodeExpiresAt: Date.now() + 30 * 60 * 1000
+      });
+
+      await user.save();
+
+      // 🔔 NOTIFICATION: Admin Alert for new Google registration
+      (async () => {
+        try {
+          const io = req.app.get("io");
+          const adminUsers = await User.find({ role: { $in: ['admin', 'super_admin'] } }).select('_id');
+          await createNotifications({
+            io,
+            title: '✅ مستخدم جديد (Google)',
+            message: `تم تسجيل مستخدم جديد عبر Google: ${firstName} ${lastName} (${email})`,
+            type: 'USER_REGISTERED',
+            actor: user._id,
+            userId: adminUsers.map(a => a._id.toString()),
+            data: { userId: user._id, email, provider: 'google' },
+            link: `/admin/users`,
+          });
+        } catch (err) {
+          console.error("Notification Error:", err);
+        }
+      })();
+    }
+
+    // Generate tokens
+    const token = jwt.sign(
+      { id: user._id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRE || "1d" }
+    );
+
+    const refreshToken = jwt.sign(
+      { id: user._id, version: Date.now() },
+      process.env.REFRESH_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    // 🔄 TOKEN ROTATION: Store refresh token in user document
+    const refreshTokenExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    user.refreshTokens = user.refreshTokens || [];
+    user.refreshTokens.push({
+      token: refreshToken,
+      createdAt: new Date(),
+      expiresAt: refreshTokenExpiry
+    });
+
+    // 🧹 CLEANUP: Remove expired refresh tokens (keep max 5)
+    user.refreshTokens = user.refreshTokens.filter(rt => rt.expiresAt > new Date());
+    if (user.refreshTokens.length > 5) {
+      user.refreshTokens = user.refreshTokens.slice(-5);
+    }
+
+    await user.save({ validateModifiedOnly: true });
+
+    // Set cookies with secure configuration
+    const isProduction = process.env.NODE_ENV === "production";
+    res.cookie("accessToken", token, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "strict" : "lax",
+      maxAge: 24 * 60 * 60 * 1000,
+      path: '/'
+    });
+
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "strict" : "lax",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      path: '/'
+    });
+
+    res.status(200).json({
+      success: true,
+      tokens: { accessToken: token, refreshToken },
+      data: { user: { id: user._id, role: user.role, email: user.email, firstName: user.firstName, lastName: user.lastName } }
+    });
+  } catch (error) {
+    console.error('Google Auth Error:', error);
+    next(new createError("Google authentication failed", 500));
+  }
+};
+
+// 🔐 SOCIAL COOKIE SETTING ENDPOINT - For NextAuth integration
+export const setSocialCookies = async (req, res, next) => {
+  try {
+    const { accessToken, refreshToken, role } = req.body;
+
+    if (!accessToken || !refreshToken) {
+      return next(new createError("Access token and refresh token are required", 400));
+    }
+
+    // Set cookies with secure configuration
+    const isProduction = process.env.NODE_ENV === "production";
+    res.cookie("accessToken", accessToken, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "strict" : "lax",
+      maxAge: 24 * 60 * 60 * 1000,
+      path: '/'
+    });
+
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "strict" : "lax",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      path: '/'
+    });
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Set Social Cookies Error:', error);
+    next(new createError("Failed to set social cookies", 500));
   }
 };

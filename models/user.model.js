@@ -240,7 +240,30 @@ const userSchema = new mongoose.Schema({
   passwordResetVerified: {
     type: Boolean,
     default: false
-  }
+  },
+  googleId: {
+    type: String,
+    sparse: true,
+    index: true
+  },
+  avatar: {
+    type: String,
+    default: ''
+  },
+  refreshTokens: [{
+    token: {
+      type: String,
+      required: true
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now
+    },
+    expiresAt: {
+      type: Date,
+      required: true
+    }
+  }]
 
 }, {
   timestamps: true,
