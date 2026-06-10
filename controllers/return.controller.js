@@ -76,23 +76,22 @@ export const createReturnRequest = async (req, res, next) => {
     (async () => {
       try {
         const io = req.app.get("io");
-        const adminUsers = await User.find({ role: 'admin' }).lean();
-
+        const admin = await User.findOne({ role: 'admin' }).lean();
         await createNotifications({
           io, title: '🔙 طلب استرجاع جديد',
           message: `تم تقديم طلب استرجاع للمنتج في الطلب #${order.orderNumber || order._id.toString().slice(-6)}`,
-          type: 'RETURN_REQUESTED', actor: req.user._id, userId: [orderItem.seller.toString()],
+          type: 'RETURN_REQUESTED', actor: req.user._id,
+          userId: orderItem.seller.toString(),
           data: { returnId: returnRequest._id, orderId: order._id }, link: `/seller/returns/${returnRequest._id}`,
         });
 
-        if (adminUsers.length > 0) {
-          await createNotifications({
-            io, title: '📦 طلب استرجاع جديد للإدارة',
-            message: `طلب استرجاع من ${req.user.firstName || 'مستخدم'} للطلب #${order.orderNumber || order._id.toString().slice(-6)}`,
-            type: 'RETURN_REQUESTED', actor: req.user._id, userId: adminUsers.map(a => a._id.toString()),
-            data: { returnId: returnRequest._id, orderId: order._id }, link: `/admin/returns/${returnRequest._id}`,
-          });
-        }
+        await createNotifications({
+          io, title: '📦 طلب استرجاع جديد للإدارة',
+          message: `طلب استرجاع من ${req.user.firstName || 'مستخدم'} للطلب #${order.orderNumber || order._id.toString().slice(-6)}`,
+          type: 'RETURN_REQUESTED', actor: req.user._id,
+          userId: admin._id.toString(),
+          data: { returnId: returnRequest._id, orderId: order._id }, link: `/admin/returns/${returnRequest._id}`,
+        })
       } catch (err) { console.error('Notification Error:', err.message); }
     })();
 

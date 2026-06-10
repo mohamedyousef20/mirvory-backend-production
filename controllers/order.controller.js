@@ -138,7 +138,7 @@ export const createOrder = async (req, res, next) => {
           await createNotifications({
             io, title: "🔔 طلب جديد",
             message: `لديك طلب جديد. رقم الطلب: ${order._id.toString().slice(-6)}`,
-            type: "ORDER_PLACED", actor: req.user._id, userId: [sellerId],
+            type: "ORDER_PLACED", actor: req.user._id, userId: sellerId,
             data: { orderId: order._id }, link: `/seller/orders/${order._id}`,
           });
         }
@@ -146,7 +146,8 @@ export const createOrder = async (req, res, next) => {
         await createNotifications({
           io, title: "✅ تم استلام طلبك",
           message: `تم استلام طلبك رقم #${order._id.toString().slice(-6)} بنجاح وسيتم تجهيزه`,
-          type: "ORDER_PLACED", actor: req.user._id, userId: [req.user._id.toString()],
+          type: "ORDER_PLACED", actor: req.user._id, 
+          userId: req.user._id.toString(),
           data: { orderId: order._id }, link: `/orders/${order._id}`,
         });
       } catch (err) { console.error("Notification Error:", err); }
@@ -180,7 +181,8 @@ export const orderComplete = async (req, res, next) => {
         await createNotifications({
           io, title: '📦 تم تسليم الطلب',
           message: `تم تسليم طلبك بنجاح!`,
-          type: 'ORDER_COMPLETED', actor: req.user._id, userId: [order.buyer.toString()],
+          type: 'ORDER_COMPLETED', actor: req.user._id, 
+          userId: order.buyer.toString(),
           data: { orderId: order._id }, link: `/orders/${order._id}`,
         });
       } catch (err) { console.error("Notification Error:", err); }
@@ -243,7 +245,7 @@ export const updateDeliveryStatus = async (req, res, next) => {
         await createNotifications({
           io, title: "تحديث حالة الطلب ✅",
           message: `📦 تم تغيير حالة طلبك إلى: ${deliveryStatus}`,
-          type: "ORDER_UPDATED", actor: req.user._id, userId: [order.buyer.toString()],
+          type: "ORDER_PACKED", actor: req.user._id, userId: order.buyer.toString(),
           data: { orderId: order._id }, link: `/orders/${order._id}`,
         });
       } catch (err) { console.error(err); }
@@ -292,7 +294,6 @@ export const confirmPreparation = async (req, res, next) => {
 
     // 🔔 NOTIFICATION: Order Prepared
     if (anyUpdated) {
-      (async () => {
         try {
           const io = req.app.get("io");
           const adminUsers = await User.find({ role: 'admin' });
@@ -318,7 +319,7 @@ export const confirmPreparation = async (req, res, next) => {
         } catch (err) {
           console.error("Notification error:", err);
         }
-      })();
+      
     }
 
     res.json({ message: anyUpdated ? 'success' : 'fail', orderPrepared: order.isPrepared, updatedItems: sellerItems.map(it => ({ _id: it._id, isPrepared: it.isPrepared })) });
@@ -530,8 +531,8 @@ export const processOrderPayout = async (req, res, next) => {
           await createNotifications({
             io, title: '💵 أرباح جديدة',
             message: `إضافة ${amount.toFixed(2)} جنيه لمحفظتك من الطلب #${order._id.toString().slice(-6)}`,
-            type: 'PAYOUT_COMPLETED', actor: req.user._id, userId: [sellerId],
-            data: { orderId: order._id }, link: `/seller/wallet`,
+            type: 'PAYOUT_COMPLETED', actor: req.user._id, userId: sellerId,
+            data: { orderId: order._id }, link: `/vendor/dashbord`,
           });
         }
       } catch (err) { console.error("Notification Error:", err); }

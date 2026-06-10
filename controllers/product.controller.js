@@ -88,18 +88,17 @@ export const createProduct = async (req, res, next) => {
     (async () => {
       try {
         const io = req.app.get("io");
-        const adminUsers = await User.find({ role: 'admin' }).select('_id').lean();
+        const admin = await User.findOne({ role: 'admin' }).select('_id');
 
-        if (adminUsers.length > 0) {
           await createNotifications({
             io, title: '📦 منتج جديد للمراجعة',
             message: `تم إضافة منتج جديد "${product.title}" بواسطة ${product.seller.firstName}`,
             type: 'PRODUCT_SUBMITTED',
             actor: req.user._id,
-            userIds: adminUsers.map(a => a._id.toString()),
+            userId: admin._id.toString(),
             data: { productId: product._id }, link: `/products/${product._id}`,
           });
-        }
+        
       } catch (err) { console.error("Notification Error:", err); }
     })();
 
@@ -164,15 +163,15 @@ export const updateProduct = async (req, res, next) => {
       (async () => {
         try {
           const io = req.app.get("io");
-          const adminUsers = await User.find({ role: 'admin' }).select('_id').lean();
-          if (adminUsers.length > 0) {
+          const admin = await User.findOne({ role: 'admin' }).select('_id');
             await createNotifications({
               io, title: '📦 تحديث منتج للمراجعة',
               message: `تم تعديل منتج "${updatedProduct.title}" ويحتاج إلى مراجعة جديدة`,
-              type: 'PRODUCT_UPDATED_PENDING', actor: req.user._id, userIds: adminUsers.map(a => a._id.toString()),
+              type: 'PRODUCT_UPDATED', actor: req.user._id,
+              userId: admin._id.toString(),
               data: { productId: updatedProduct._id }, link: `/admin/products/${updatedProduct._id}`,
             });
-          }
+          
         } catch (err) { console.error(err); }
       })();
     }
@@ -221,12 +220,19 @@ export const approveProduct = async (req, res, next) => {
 
     (async () => {
       try {
+        // ⚠️ تأكد من جلب الـ io في أول الدالة
         const io = req.app.get("io");
+
+        // عدل استدعاء الدالة المساعدة ليكون هكذا:
         await createNotifications({
-          io, title: "✅ تمت الموافقة على منتجك",
+          io,
+          title: "تم قبول منتجك",
           message: `تمت الموافقة على المنتج "${product.title}" وهو معروض الآن للبيع.`,
-          type: "PRODUCT_APPROVED", actor: req.user._id, userIds: [product.seller._id.toString()], // ✅ تم التعديل
-          data: { productId: product._id }, link: `/seller/products/${product._id}`,
+          type: "PRODUCT_APPROVED",
+          actor: req.user._id,             // المعرف بتاع الإدمن اللي وافق
+          userId: product.seller._id.toString(),
+          data: { productId: product._id },
+          link: `/vendor/dashbord`         // الرابط اللي التاجر هيروح عليه لما يضغط
         });
       } catch (err) { console.error(err); }
     })();
@@ -286,7 +292,8 @@ export const trustProduct = async (req, res, next) => {
         await createNotifications({
           io, title: "✅ تم توثيق  منتجك",
           message: `تم توثيق منتجك "${product.title}" وهو معروض الآن للبيع.`,
-          type: "PRODUCT_UPDATED", actor: req.user._id, userIds: [product.seller._id.toString()], // ✅ تم التعديل
+          type: "PRODUCT_UPDATED", actor: req.user._id,
+          userIds: product.seller._id.toString(), // ✅ تم التعديل
           data: { productId: product._id }, link: `/products/${product._id}`,
         });
       } catch (err) { console.error(err); }

@@ -32,10 +32,18 @@ const notificationSchema = new mongoose.Schema(
         "ORDER_DELIVERED",
         "ORDER_COMPLETED",
         "ORDER_CANCELLED",
-        "ORDER_RETURN_REQUESTED",
         "ORDER_RETURN_APPROVED",
         "ORDER_RETURN_REJECTED",
         "ORDER_REFUNDED",
+        "ORDER_PREPARED",
+        "PAYOUT_COMPLETED",
+
+        "COMPLAINT_CREATED",
+        "COMPLAINT_STATUS_UPDATED",
+        "COMPLAINT_REPLY",
+
+        "RETURN_REQUESTED",
+        "RETURN_STATUS_UPDATED",
 
         "PRODUCT_SUBMITTED",
         "PRODUCT_APPROVED",
@@ -52,7 +60,7 @@ const notificationSchema = new mongoose.Schema(
         "USER_REGISTERED",
         "USER_VERIFIED",
         "USER_SUSPENDED",
-        "RETURN_STATUS_UPDATED",
+        
 
         "ANNOUNCEMENT",
         "CUSTOM",

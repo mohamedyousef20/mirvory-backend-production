@@ -79,7 +79,7 @@ export const getSellerForAdmin = async (req, res, next) => {
       .skip(skip)
       .limit(limit)
       .lean();
-console.log(sellers,'12345688')
+    console.log(sellers, '12345688')
     res.status(200).json(formatPaginationResponse(sellers, total, req.pagination));
   } catch (error) {
     next(new createError(error.message, 500));
@@ -105,7 +105,7 @@ export const getUsersForAdmin = async (req, res, next) => {
       .skip(skip)
       .limit(limit)
       .lean();
-    console.log(total,'user147')
+    console.log(total, 'user147')
     res.status(200).json(formatPaginationResponse(users, total, req.pagination));
   } catch (error) {
     next(new createError(error.message, 500));
@@ -126,11 +126,11 @@ export const register = async (req, res, next) => {
     const hashedCode = await bcrypt.hash(verificationCode, 10);
 
     const user = new User({
-      firstName, 
-      lastName, 
-      email, 
+      firstName,
+      lastName,
+      email,
       phone,
-       password,
+      password,
       role: role || "user",
       address,
       verificationCode: hashedCode,
@@ -159,14 +159,14 @@ export const register = async (req, res, next) => {
     (async () => {
       try {
         const io = req.app.get("io");
-        const adminUsers = await User.find({ role: 'admin' }).select('_id');
+        const admin = await User.findOne({ role: 'admin' }).select('_id');
         await createNotifications({
           io,
           title: '✅ مستخدم جديد',
           message: `تم تسجيل مستخدم جديد: ${firstName} ${lastName} (${email})`,
           type: 'USER_REGISTERED',
           actor: user._id,
-          userId: adminUsers.map(a => a._id.toString()),
+          userId: admin._id.toString(),
           data: { userId: user._id, email },
           link: `/admin/users`,
         });
@@ -204,17 +204,19 @@ export const login = async (req, res, next) => {
     const token = jwt.sign(
       { id: user._id, role: user.role },
       process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRE || "1d" }
+      { expiresIn: process.env.JWT_EXPIRE || "7d" }
     );
 
     const refreshToken = jwt.sign(
       { id: user._id, version: Date.now() },
       process.env.REFRESH_SECRET,
-      { expiresIn: "7d" }
+      {
+        expiresIn: process.env.JWT_REFRESH_EXPIRE || '10d',
+      }
     );
 
     // 🔄 TOKEN ROTATION: Store refresh token in user document
-    const refreshTokenExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const refreshTokenExpiry = new Date(Date.now() + process.env.JWT_REFRESH_EXPIRE);
     user.refreshTokens = user.refreshTokens || [];
     user.refreshTokens.push({
       token: refreshToken,
@@ -236,7 +238,7 @@ export const login = async (req, res, next) => {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "strict" : "lax",
-      maxAge: 24 * 60 * 60 * 1000,
+      maxAge: Number(process.env.COOKIE_EXPIRE),
       path: '/'
     });
 
@@ -244,7 +246,7 @@ export const login = async (req, res, next) => {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "strict" : "lax",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      maxAge: Number(process.env.COOKIE_REFRESH_EXPIRE),
       path: '/'
     });
 
@@ -258,7 +260,7 @@ export const login = async (req, res, next) => {
 export const logout = async (req, res, next) => {
   try {
     const refreshToken = req.cookies.refreshToken;
-    
+
     // 🧹 CLEAR REFRESH TOKEN: Remove from user document if exists
     if (refreshToken && req.user?._id) {
       await User.findByIdAndUpdate(req.user._id, {
@@ -286,7 +288,7 @@ export const refreshToken = async (req, res, next) => {
 
     const decoded = jwt.verify(refreshToken, process.env.REFRESH_SECRET);
     const user = await User.findById(decoded.id).select('+refreshTokens');
-    
+
     if (!user || !user.isActive) return next(new createError("المستخدم غير موجود أو موقوف", 401));
 
     // 🔐 VERIFY TOKEN: Check if refresh token exists in user's stored tokens
@@ -308,12 +310,14 @@ export const refreshToken = async (req, res, next) => {
     const newRefreshToken = jwt.sign(
       { id: user._id, version: Date.now() },
       process.env.REFRESH_SECRET,
-      { expiresIn: "7d" }
+      {
+        expiresIn: process.env.JWT_REFRESH_EXPIRE,
+      }
     );
 
     // 🔄 ROTATION: Remove old token and add new one
     user.refreshTokens = user.refreshTokens.filter(rt => rt.token !== refreshToken);
-    const newRefreshTokenExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const newRefreshTokenExpiry = new Date(Date.now() + process.env.JWT_REFRESH_EXPIRE);
     user.refreshTokens.push({
       token: newRefreshToken,
       createdAt: new Date(),
@@ -333,7 +337,7 @@ export const refreshToken = async (req, res, next) => {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "strict" : "lax",
-      maxAge: 24 * 60 * 60 * 1000,
+      maxAge: Number(process.env.COOKIE_EXPIRE),
       path: '/'
     });
 
@@ -341,7 +345,7 @@ export const refreshToken = async (req, res, next) => {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "strict" : "lax",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      maxAge: Number(process.env.COOKIE_REFRESH_EXPIRE),
       path: '/'
     });
 
@@ -383,7 +387,7 @@ export const verifyEmail = async (req, res, next) => {
           message: 'تم تفعيل حسابك بنجاح. نتمنى لك تسوقاً ممتعاً.',
           type: 'USER_VERIFIED',
           actor: user._id,
-          userId: [user._id.toString()],
+          userId: user._id.toString(),
           data: {},
           link: '/',
         });
@@ -403,7 +407,7 @@ export const resendVerification = async (req, res, next) => {
   try {
     const { email } = req.body;
     let user = email ? await User.findOne({ email }) : (req.user?._id ? await User.findById(req.user._id) : null);
-console.log(user,'123456s')
+    console.log(user, '123456s')
     if (!user) return next(new createError("المستخدم غير موجود", 404));
     if (user.isVerified) return next(new createError("البريد الإلكتروني مفعل بالفعل", 400));
 
@@ -644,24 +648,24 @@ export const updateVendorBalanceByAdmin = async (req, res, next) => {
     // Save with validateModifiedOnly to respect full validation rules safely
     await seller.save({ validateModifiedOnly: true });
 
-    // 🔔 NOTIFICATION: Wallet Update for Seller
-    (async () => {
-      try {
-        const io = req.app.get("io");
-        await createNotifications({
-          io,
-          title: '💰 تحديث المحفظة',
-          message: 'تم تحديث رصيد محفظتك من قبل الإدارة.',
-          type: 'WALLET_UPDATED',
-          actor: req.user.id,
-          userId: [seller._id.toString()],
-          data: { balance: seller.wallet.balance },
-          link: '/seller/wallet',
-        });
-      } catch (err) {
-        console.error("Notification Error:", err);
-      }
-    })();
+    // // 🔔 NOTIFICATION: Wallet Update for Seller
+    // (async () => {
+    //   try {
+    //     const io = req.app.get("io");
+    //     await createNotifications({
+    //       io,
+    //       title: '💰 تحديث المحفظة',
+    //       message: 'تم تحديث رصيد محفظتك من قبل الإدارة.',
+    //       type: 'WALLET_UPDATED',
+    //       actor: req.user.id,
+    //       userId: [seller._id.toString()],
+    //       data: { balance: seller.wallet.balance },
+    //       link: '/seller/wallet',
+    //     });
+    //   } catch (err) {
+    //     console.error("Notification Error:", err);
+    //   }
+    // })();
 
     res.status(200).json({ success: true, message: "تم تحديث الرصيد بنجاح", data: seller.wallet });
   } catch (error) {
@@ -740,7 +744,7 @@ export const toggleUserActiveStatus = async (req, res, next) => {
           message: msg,
           type: type,
           actor: req.user.id,
-          userId: [user._id.toString()],
+          userId: user._id.toString(),
           data: { isActive },
           link: '/',
         });
@@ -829,14 +833,14 @@ export const googleAuth = async (req, res, next) => {
       (async () => {
         try {
           const io = req.app.get("io");
-          const adminUsers = await User.find({ role: { $in: ['admin', 'super_admin'] } }).select('_id');
+          const admin = await User.findOne({ role: 'admin' }).select('_id');
           await createNotifications({
             io,
             title: '✅ مستخدم جديد (Google)',
             message: `تم تسجيل مستخدم جديد عبر Google: ${firstName} ${lastName} (${email})`,
             type: 'USER_REGISTERED',
             actor: user._id,
-            userId: adminUsers.map(a => a._id.toString()),
+            userId: admin._id.toString(),
             data: { userId: user._id, email, provider: 'google' },
             link: `/admin/users`,
           });
@@ -860,7 +864,7 @@ export const googleAuth = async (req, res, next) => {
     );
 
     // 🔄 TOKEN ROTATION: Store refresh token in user document
-    const refreshTokenExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const refreshTokenExpiry = new Date(Date.now() + process.env.JWT_REFRESH_EXPIRE);
     user.refreshTokens = user.refreshTokens || [];
     user.refreshTokens.push({
       token: refreshToken,
@@ -882,7 +886,7 @@ export const googleAuth = async (req, res, next) => {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "strict" : "lax",
-      maxAge: 24 * 60 * 60 * 1000,
+      maxAge: Number(process.env.COOKIE_EXPIRE),
       path: '/'
     });
 
@@ -890,7 +894,7 @@ export const googleAuth = async (req, res, next) => {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "strict" : "lax",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      maxAge: Number(process.env.COOKIE_REFRESH_EXPIRE),
       path: '/'
     });
 
@@ -920,7 +924,7 @@ export const setSocialCookies = async (req, res, next) => {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "strict" : "lax",
-      maxAge: 24 * 60 * 60 * 1000,
+      maxAge: Number(process.env.COOKIE_EXPIRE),
       path: '/'
     });
 
@@ -928,7 +932,7 @@ export const setSocialCookies = async (req, res, next) => {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "strict" : "lax",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      maxAge: Number(process.env.COOKIE_REFRESH_EXPIRE),
       path: '/'
     });
 

@@ -6,37 +6,35 @@ import { createNotifications } from '../utils/notification.js';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
+// 🔒 عزل كامل: كل مستخدم يرى فقط المستندات المرتبطة بمعرفه الخاص بشكل قطعي
 export const getNotifications = async (req, res, next) => {
   try {
     const userId = req.user._id;
-    const role = req.user.role;
 
-    // 🔒 ROLE ISOLATION FIX: Only return notifications specifically for this user
-    // OR true broadcast notifications (no userId, type: ALL_USERS)
-    const notifications = await Notification.find({
-      $or: [
-        { userId }, // Notifications specifically for this user
-        { type: 'ALL_USERS', userId: { $exists: false } } // True broadcasts for all users
-      ]
-    }).sort({ createdAt: -1 }).lean();
+    const notifications = await Notification.find({ userId })
+      .sort({ createdAt: -1 })
+      .lean();
 
     res.json({ success: true, notifications });
   } catch (error) { next(error); }
 };
 
+// 🔒 تحديث آمن: التأكد من أن المستخدم يغير حالة الإشعار الخاص به فقط لمنع التداخل
 export const markAsRead = async (req, res, next) => {
   try {
     const { id } = req.body;
     if (!isValidObjectId(id)) throw createError("المعرف غير صالح", 400);
-    const notification = await Notification.findByIdAndUpdate(
-      id,
+
+    const notification = await Notification.findOneAndUpdate(
+      { _id: id, userId: req.user._id }, // شرط التحقق من الملكية لمنع التلاعب بين الأدوار
       {
         seen: true,
         deleteAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
       },
       { new: true }
     );
-    if (!notification) throw createError('الإشعار غير موجود', 404);
+
+    if (!notification) throw createError('الإشعار غير موجود أو غير تابع لك', 404);
     res.json({ success: true, notification });
   } catch (error) { next(error); }
 };
@@ -51,48 +49,54 @@ export const markAllAsRead = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
+// 🔒 حساب معزول بناءً على المعرف الفردي الحقيقي فقط
 export const getUnreadCount = async (req, res, next) => {
   try {
-    // 🔒 ROLE ISOLATION FIX: Only count notifications specifically for this user
-    // OR true broadcast notifications (no userId, type: ALL_USERS)
     const count = await Notification.countDocuments({
-      $or: [
-        { userId: req.user._id, seen: false },
-        { type: 'ALL_USERS', userId: { $exists: false }, seen: false }
-      ]
+      userId: req.user._id,
+      seen: false
     });
     res.json({ success: true, count });
   } catch (error) { next(error); }
 };
 
+// 🔒 توزيع البيانات بشكل منفصل (Fan-Out) لمنع تداخل حالات القراءة بين الحسابات
 export const sendNotification = async (req, res, next) => {
   try {
-    // 🚨 أمان: الإدارة فقط ترسل إشعارات يدوية
-    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw createError("مرفوض", 403);
+    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
+      throw createError("مرفوض، صلاحيات غير كافية", 403);
+    }
 
     const { title, message, type, userId = [], role, orderId } = req.body;
     if (!title || !message || !type) throw createError('العنوان والرسالة ونوع الإشعار مطلوبة', 400);
 
     const io = req.app.get("io");
 
-    // ✅ الاعتماد على المساعد (Helper) لضمان تشغيل الـ Sockets في الوقت الفعلي
     if (userId && userId.length > 0) {
+      // 1. إرسال لمجموعة محددة من المعرفات مسبقاً
       await createNotifications({
         io, title, message, type, actor: req.user._id, userId: userId, data: { orderId }, link: orderId ? `/orders/${orderId}` : '/'
       });
     } else if (role) {
-      const targetUsers = await User.find({ role }).select('_id').lean();
+      // 2. إرسال لدور محدد (مثال: الـ Seller فقط عند قبول المنتج)
+      const targetUsers = await User.find({ role, isActive: true }).select('_id').lean();
       if (targetUsers.length > 0) {
+        const userIds = targetUsers.map(u => u._id.toString());
         await createNotifications({
-          io, title, message, type, actor: req.user._id, userId: targetUsers.map(u => u._id.toString()), data: { orderId }
+          io, title, message, type, actor: req.user._id, userId: userIds, data: { orderId }
         });
       }
     } else {
-      // إشعار عام للجميع
-      await createNotifications({
-        io, title, message, type: 'ALL_USERS', actor: req.user._id, userId: [], data: {}
-      });
+      // 3. إشعار عام لجميع المستخدمين في النظام بصورة مستندات فردية معزولة
+      const allUsers = await User.find({ isActive: true }).select('_id').lean();
+      if (allUsers.length > 0) {
+        const allUserIds = allUsers.map(u => u._id.toString());
+        await createNotifications({
+          io, title, message, type: 'ALL_USERS', actor: req.user._id, userId: allUserIds, data: {}
+        });
+      }
     }
-    res.status(201).json({ success: true, message: 'تم بث الإشعار بنجاح' });
+
+    res.status(201).json({ success: true, message: 'تم بث وتوزيع الإشعار بنجاح لجميع الحسابات المستهدفة بشكل مستقل' });
   } catch (error) { next(error); }
 };

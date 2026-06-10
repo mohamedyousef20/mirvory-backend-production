@@ -2,7 +2,7 @@ import Coupon from '../models/coupon.model.js';
 import Cart from '../models/cart.model.js';
 import Order from '../models/order.model.js';
 import createError from '../utils/error.js';
-import { createNotifications } from '../utils/notification.js';
+// import { createNotifications } from '../utils/notification.js';
 import User from '../models/user.model.js';
 
 export const getAllCoupons = async (req, res, next) => {
@@ -29,28 +29,28 @@ export const createCoupon = async (req, res, next) => {
         const coupon = new Coupon({ ...req.body, code });
         await coupon.save();
 
-        // 🔔 NOTIFICATION: Coupon Created (broadcast to all users)
-        (async () => {
-            try {
-                const io = req.app.get("io");
-                const allUsers = await User.find({ isActive: true });
+        // // 🔔 NOTIFICATION: Coupon Created (broadcast to all users)
+        // (async () => {
+        //     try {
+        //         const io = req.app.get("io");
+        //         const allUsers = await User.find({ isActive: true });
 
-                if (allUsers.length > 0) {
-                    await createNotifications({
-                        io,
-                        title: '🎉 كوبون جديد!',
-                        message: `كوبون جديد متاح الآن: ${code} - خصم ${coupon.discountType === 'percentage' ? coupon.discountValue + '%' : coupon.discountValue + ' جنيه'}`,
-                        type: 'COUPON_CREATED',
-                        actor: req.user._id,
-                        userId: allUsers.map(u => u._id.toString()),
-                        data: { couponId: coupon._id, code: coupon.code },
-                        link: '/coupons',
-                    });
-                }
-            } catch (err) {
-                console.error("Notification Error:", err);
-            }
-        })();
+        //         if (allUsers.length > 0) {
+        //             await createNotifications({
+        //                 io,
+        //                 title: '🎉 كوبون جديد!',
+        //                 message: `كوبون جديد متاح الآن: ${code} - خصم ${coupon.discountType === 'percentage' ? coupon.discountValue + '%' : coupon.discountValue + ' جنيه'}`,
+        //                 type: 'COUPON_CREATED',
+        //                 actor: req.user._id,
+        //                 userId: allUsers.map(u => u._id.toString()),
+        //                 data: { couponId: coupon._id, code: coupon.code },
+        //                 link: '/coupons',
+        //             });
+        //         }
+        //     } catch (err) {
+        //         console.error("Notification Error:", err);
+        //     }
+        // })();
 
         res.status(201).json(coupon);
     } catch (error) { next(error); }

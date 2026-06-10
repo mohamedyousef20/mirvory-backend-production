@@ -55,20 +55,19 @@ export const createComplaint = async (req, res, next) => {
     (async () => {
       try {
         const io = req.app.get('io');
-        const adminUsers = await User.find({ role: 'admin' });
+        const admin = await User.findOne({ role: 'admin' }).select('_id');
         
-        if (adminUsers.length > 0) {
           await createNotifications({
             io,
             title: '📢 شكوى جديدة',
             message: `تم تقديم شكوى جديدة: ${complaint.title}`,
             type: 'COMPLAINT_CREATED',
             actor: req.user._id,
-            userId: adminUsers.map(a => a._id.toString()),
+            userId: admin._id.toString(),
             data: { complaintId: complaint._id },
             link: `/admin/complaints/${complaint._id}`,
           });
-        }
+        
       } catch (err) {
         console.error('Notification Error:', err);
       }
@@ -224,20 +223,14 @@ export const updateComplaintStatus = async (req, res, next) => {
     (async () => {
       try {
         const io = req.app.get('io');
-        const statusMessages = {
-          pending: 'تم تحديث حالة شكواك إلى: قيد الانتظار',
-          in_progress: 'جاري معالجة شكواك',
-          resolved: 'تم حل شكواك بنجاح',
-          cancelled: 'تم إلغاء شكواك'
-        };
 
         await createNotifications({
           io,
           title: '📢 تحديث حالة الشكوى',
-          message: statusMessages[status],
+          message: 'تم تحديث حالة شكواك :  ', 
           type: 'COMPLAINT_STATUS_UPDATED',
           actor: req.user._id,
-          userId: [complaint.user.toString()],
+          userId: complaint.user.toString(),
           data: { complaintId: complaint._id, status },
           link: `/complaints`,
         });
