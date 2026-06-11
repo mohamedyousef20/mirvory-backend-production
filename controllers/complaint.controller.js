@@ -52,26 +52,25 @@ export const createComplaint = async (req, res, next) => {
     }
 
     // Notify admins about new complaint
-    (async () => {
-      try {
-        const io = req.app.get('io');
-        const admin = await User.findOne({ role: 'admin' }).select('_id');
-        
-          await createNotifications({
-            io,
-            title: '📢 شكوى جديدة',
-            message: `تم تقديم شكوى جديدة: ${complaint.title}`,
-            type: 'COMPLAINT_CREATED',
-            actor: req.user._id,
-            userId: admin._id.toString(),
-            data: { complaintId: complaint._id },
-            link: `/admin/complaints/${complaint._id}`,
-          });
-        
-      } catch (err) {
-        console.error('Notification Error:', err);
-      }
-    })();
+    try {
+      const io = req.app.get('io');
+      const admin = await User.findOne({ role: 'admin' }).select('_id');
+
+      await createNotifications({
+        io,
+        title: '📢 شكوى جديدة',
+        message: `تم تقديم شكوى جديدة: ${complaint.title}`,
+        type: 'COMPLAINT_CREATED',
+        actor: req.user._id,
+        userId: admin._id.toString(),
+        data: { complaintId: complaint._id },
+        link: `/admin/complaints/${complaint._id}`,
+      });
+
+    } catch (err) {
+      console.error('Notification Error:', err);
+    }
+
 
     res.status(201).json({
       success: true,
@@ -218,26 +217,32 @@ export const updateComplaintStatus = async (req, res, next) => {
     // Populate for response
     await complaint.populate('user', 'firstName lastName email');
     await complaint.populate('order', 'orderNumber');
-
+    console.log(complaint, 'v145')
     // Notify user about status update
-    (async () => {
-      try {
-        const io = req.app.get('io');
+    try {
+      const io = req.app.get('io');
+      const statusMessages = {
+        pending: 'تم تحديث حالة شكواك إلى: قيد الانتظار',
+        open: 'تم فتح الشكوى ومراجعتها',
+        in_progress: 'جاري معالجة شكواك',
+        resolved: 'تم حل شكواك بنجاح',
+        cancelled: 'تم إلغاء شكواك'
+      };
 
-        await createNotifications({
-          io,
-          title: '📢 تحديث حالة الشكوى',
-          message: 'تم تحديث حالة شكواك :  ', 
-          type: 'COMPLAINT_STATUS_UPDATED',
-          actor: req.user._id,
-          userId: complaint.user.toString(),
-          data: { complaintId: complaint._id, status },
-          link: `/complaints`,
-        });
-      } catch (err) {
-        console.error('Notification Error:', err);
-      }
-    })();
+      await createNotifications({
+        io,
+        title: '📢 تحديث حالة الشكوى',
+        message: statusMessages[status],
+        type: 'COMPLAINT_STATUS_UPDATED',
+        actor: req.user._id,
+        userId: complaint.user._id.toString(),
+        data: { complaintId: complaint._id, status },
+        link: `/complaints`,
+      });
+    } catch (err) {
+      console.error('Notification Error:', err);
+    }
+
 
     res.json({
       success: true,
@@ -324,8 +329,8 @@ export const deleteComplaint = async (req, res, next) => {
     }
 
     // Only allow deletion if user is admin or complaint owner and not resolved
-    if (req.user.role !== 'admin' ) {
-      console.log(req.user.role,'r55')
+    if (req.user.role !== 'admin') {
+      console.log(req.user.role, 'r55')
       if (complaint.user.toString() !== req.user._id.toString()) {
         return next(new createError('غير مصرح لك بحذف هذه الشكوى', 403));
       }
