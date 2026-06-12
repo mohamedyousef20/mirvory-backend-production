@@ -402,7 +402,7 @@ export const getVendorEarnings = async (req, res, next) => {
       order.items.forEach(item => {
         if (item.seller.toString() === req.params.vendorId) {
           const itemTotal = item.price * item.quantity;
-          const fee = itemTotal < 300 ? 0.18 : itemTotal <= 799 ? 0.15 : itemTotal <= 1999 ? 0.12 : 0.10;
+          const fee = itemTotal < 300 ? 0.12 : itemTotal <= 799 ? 0.10 : itemTotal <= 1999 ? 0.8: 0.6;
           earnings += itemTotal * (1 - fee);
         }
       });

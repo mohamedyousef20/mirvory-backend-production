@@ -211,7 +211,7 @@ export const getAdminCounters = async (req, res) => {
                 branches: [
                   {
                     case: { $lt: ['$subtotal', 300] },
-                    then: 0.18
+                    then: 0.12
                   },
                   {
                     case: {
@@ -220,7 +220,7 @@ export const getAdminCounters = async (req, res) => {
                         { $lte: ['$subtotal', 799] }
                       ]
                     },
-                    then: 0.15
+                    then: 0.10
                   },
                   {
                     case: {
@@ -229,10 +229,10 @@ export const getAdminCounters = async (req, res) => {
                         { $lte: ['$subtotal', 1999] }
                       ]
                     },
-                    then: 0.12
+                    then: 0.8
                   }
                 ],
-                default: 0.10
+                default: 0.6
               }
             }
           }
