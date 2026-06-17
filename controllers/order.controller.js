@@ -160,37 +160,76 @@ export const createOrder = async (req, res, next) => {
 };
 
 export const orderComplete = async (req, res, next) => {
-
-
   try {
     const { id, code } = req.body;
 
+    // 1. تحديث الطلب وتأكيد الاستلام
     const order = await Order.findOneAndUpdate(
       { _id: id, secretCode: code, payoutProcessed: false },
-      { $set: { deliveryStatus: 'delivered', paymentStatus: 'paid', deliveredAt: new Date() } },
+      {
+        $set: {
+          deliveryStatus: 'delivered',
+          paymentStatus: 'paid',
+          deliveredAt: new Date(),
+          payoutProcessed: true // تأشير الطلب كمحسوب لمنع التكرار
+        }
+      },
       { new: true }
     ).populate('items.seller');
 
     if (!order) throw new createError("الطلب غير موجود أو تم تحصيله مسبقاً", 400);
 
-    await order.save();
+    // 2. حساب الأرباح وتوزيعها على البائعين (مع مهلة2 أيام)
+    const releaseDate = new Date();
+    releaseDate.setDate(releaseDate.getDate() + 1); 
 
+    for (const item of order.items) {
+      const sellerId = item.seller._id;
+      const amount = item.price * item.quantity;
+
+      // إضافة المبلغ للمحفظة المعلقة (Pending)
+      await User.findByIdAndUpdate(sellerId, {
+        $inc: { 'wallet.pendingBalance': amount },
+        $push: {
+          'wallet.pendingTransactions': {
+            orderId: order._id,
+            amount: amount,
+            releaseDate: releaseDate,
+            status: 'pending'
+          }
+        }
+      });
+    }
+
+    // 3. الإشعارات
     (async () => {
       try {
         const io = req.app.get("io");
+        // إشعار للمشتري
         await createNotifications({
           io, title: '📦 تم تسليم الطلب',
           message: `تم تسليم طلبك بنجاح!`,
-          type: 'ORDER_COMPLETED', actor: req.user._id, 
+          type: 'ORDER_COMPLETED', actor: req.user._id,
           userId: order.buyer.toString(),
           data: { orderId: order._id }, link: `/orders/${order._id}`,
         });
+
+        // إشعار للبائعين
+        for (const item of order.items) {
+          await createNotifications({
+            io, title: '💵 أرباح معلقة',
+            message: `تم استلام الطلب #${order._id.toString().slice(-6)}. رصيدك سيصبح متاحاً بعد 7 أيام.`,
+            type: 'ORDER_DELIVERED', actor: req.user._id,
+            userId: item.seller._id.toString(),
+            data: { orderId: order._id }, link: `/vendor/dashboard`,
+          });
+        }
       } catch (err) { console.error("Notification Error:", err); }
     })();
 
-    res.status(200).json({ message: 'تم استكمال الطلب بنجاح' });
+    res.status(200).json({ message: 'تم استكمال الطلب وإضافة الأرباح للمعالجة' });
   } catch (err) {
-    console.error("Notification Error:", err);
+    next(err); // استخدام next بدلاً من console.error فقط لتمرير الخطأ للمستخدم
   }
 };
 
@@ -489,6 +528,8 @@ export const cashingOrder = async (req, res, next) => {
   res.status(400).json({ message: "يرجى استخدام مسار إنشاء الطلب الأساسي (createOrder)" });
 };
 
+// order.controller.js (داخل دالة processOrderPayout)
+
 export const processOrderPayout = async (req, res, next) => {
   try {
     if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw new createError("صلاحيات غير كافية", 403);
@@ -510,12 +551,27 @@ export const processOrderPayout = async (req, res, next) => {
     });
 
     const sellerIds = Object.keys(sellerEarningsMap);
+
+    // تحديد موعد التحرير ليكون بعد 7 أيام من الآن
+    const releaseDate = new Date();
+    releaseDate.setDate(releaseDate.getDate() + 7);
+
     for (const sellerId of sellerIds) {
+      const sellerAmount = sellerEarningsMap[sellerId]; // المبلغ الخاص بهذا البائع بالتحديد
       await User.findByIdAndUpdate(
         sellerId,
         {
-          $inc: { 'wallet.pendingBalance': amount },
-          $set: { 'wallet.lastTransaction': { amount, date: new Date(), orderId: order._id } }
+          $inc: { 'wallet.pendingBalance': sellerAmount },
+          $set: { 'wallet.lastTransaction': { amount: sellerAmount, date: new Date(), orderId: order._id, type: 'sale' } },
+          // إضافة تفاصيل الطلب للمحفظة المعلقة
+          $push: {
+            'wallet.pendingTransactions': {
+              orderId: order._id,
+              amount: sellerAmount,
+              releaseDate: releaseDate,
+              status: 'pending'
+            }
+          }
         },
       );
     }
@@ -537,7 +593,6 @@ export const processOrderPayout = async (req, res, next) => {
         }
       } catch (err) { console.error("Notification Error:", err); }
     })();
-
-    res.status(200).json({ message: 'تم تحصيل الطلب بنجاح' });
+    res.status(200).json({ message: 'تم تحصيل الطلب وإضافة الرصيد المعلق بنجاح' });
   } catch (error) { next(error); }
 };

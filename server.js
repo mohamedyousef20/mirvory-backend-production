@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
 import morgan from "morgan";
+import cron from 'node-cron';
 import cookieParser from "cookie-parser";
 import { createServer } from "http";
 import { Server } from "socket.io";
@@ -12,7 +13,7 @@ import connectDB from "./config/db.js";
 import mountRoutes from "./routes/index.route.js";
 import User from "./models/user.model.js";
 import SearchHistory from "./models/searchHistory.model.js";
-
+import { releaseDueBalancesCron } from "./corn/wallet.corn.js";
 dotenv.config({ path: "./.env" });
 
 const app = express();
@@ -96,7 +97,13 @@ io.on("connection", (socket) => {
 });
 
 mountRoutes(app);
-
+cron.schedule('0 0 * * *', () => {
+  console.log('بدء تشغيل مهمة التدقيق اليومي للأرصدة المستحقة...');
+  releaseDueBalancesCron();
+}, {
+  scheduled: true,
+  timezone: "Africa/Cairo" 
+});
 // Global Error Handler
 app.use((err, req, res, next) => {
   console.error("ERROR:", err);

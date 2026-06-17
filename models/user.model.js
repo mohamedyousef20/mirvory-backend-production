@@ -140,6 +140,7 @@ const vendorSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+// user.model.js
 const walletSchema = new mongoose.Schema({
   balance: { type: Number, default: 0, min: 0 },
   currency: { type: String, default: 'EGP' },
@@ -153,6 +154,15 @@ const walletSchema = new mongoose.Schema({
     date: Date
   },
   pendingBalance: { type: Number, default: 0 },
+
+  // الإضافة الجديدة لتتبع الأرصدة المعلقة لكل طلب على حدة
+  pendingTransactions: [{
+    orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
+    amount: { type: Number, required: true },
+    addedAt: { type: Date, default: Date.now },
+    releaseDate: { type: Date, required: true },
+    status: { type: String, enum: ['pending', 'released'], default: 'pending' }
+  }]
 });
 
 const userSchema = new mongoose.Schema({
