@@ -1,22 +1,15 @@
 import { v2 as cloudinary } from 'cloudinary';
 
-console.log('Cloudinary configuration attempt:', {
-    cloud_name: 'dkmrrisek' ? 'set' : 'NOT SET',
-    api_key: "579668224964754" ? 'set' : 'NOT SET',
-    api_secret: 'iaIceTjCo9IZ4dX7xb94Klz37VU' ? 'set' : 'NOT SET'
-});
-
-try {
-    cloudinary.config({
-        cloud_name: 'dkmrrisek',
-        api_key: "579668224964754",
-        api_secret: 'iaIceTjCo9IZ4dX7xb94Klz37VU',
-        secure: true
-    });
-    console.log('Cloudinary configuration successful');
-} catch (error) {
-    console.error('Cloudinary configuration error:', error);
-    throw error;
+// All credentials MUST come from environment variables — never hardcoded
+if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+    console.error('[Cloudinary] Missing required environment variables: CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET');
 }
+
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+    secure: true,
+});
 
 export default cloudinary;

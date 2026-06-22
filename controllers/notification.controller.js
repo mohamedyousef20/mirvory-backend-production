@@ -60,6 +60,30 @@ export const getUnreadCount = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
+// Polling endpoint — used when Socket.IO is disabled (ENABLE_SOCKET=false)
+// Frontend polls this every 30 seconds to get new notifications
+export const pollNotifications = async (req, res, next) => {
+  try {
+    const userId = req.user._id;
+    const since = req.query.since ? new Date(req.query.since) : new Date(Date.now() - 60 * 1000);
+
+    const [newNotifications, unreadCount] = await Promise.all([
+      Notification.find({ userId, createdAt: { $gt: since } })
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .lean(),
+      Notification.countDocuments({ userId, seen: false }),
+    ]);
+
+    res.json({
+      success: true,
+      notifications: newNotifications,
+      unreadCount,
+      polledAt: new Date().toISOString(),
+    });
+  } catch (error) { next(error); }
+};
+
 // 🔒 توزيع البيانات بشكل منفصل (Fan-Out) لمنع تداخل حالات القراءة بين الحسابات
 export const sendNotification = async (req, res, next) => {
   try {

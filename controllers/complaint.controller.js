@@ -217,7 +217,6 @@ export const updateComplaintStatus = async (req, res, next) => {
     // Populate for response
     await complaint.populate('user', 'firstName lastName email');
     await complaint.populate('order', 'orderNumber');
-    console.log(complaint, 'v145')
     // Notify user about status update
     try {
       const io = req.app.get('io');
@@ -330,7 +329,6 @@ export const deleteComplaint = async (req, res, next) => {
 
     // Only allow deletion if user is admin or complaint owner and not resolved
     if (req.user.role !== 'admin') {
-      console.log(req.user.role, 'r55')
       if (complaint.user.toString() !== req.user._id.toString()) {
         return next(new createError('غير مصرح لك بحذف هذه الشكوى', 403));
       }

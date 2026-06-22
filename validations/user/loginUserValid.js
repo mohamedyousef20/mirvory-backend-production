@@ -3,7 +3,6 @@ import User from "../../models/user.model.js";
 import createError from "../../utils/error.js";
 
 export const loginUserValid = async (req, res, next) => {
-    console.log('loginUserValid')
     const schema = Joi.object({
         email: Joi.string().email().required().external(async (value) => {
             const user = await User.findOne({ email: value });

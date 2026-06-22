@@ -122,7 +122,7 @@ export const registerUserValid = async (req, res, next) => {
         next();
 
     } catch (error) {
-        console.log("Validation error details:", error.details);
+        
 
         if (error.details && Array.isArray(error.details)) {
             const errorMessages = error.details.map(detail => detail.message);

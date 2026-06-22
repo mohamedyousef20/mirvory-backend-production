@@ -3,7 +3,13 @@ import crypto from "crypto";
 
 const orderSchema = new mongoose.Schema({
   orderNumber: { type: String, unique: true, index: true },
+
+  // buyer is optional for guest orders (buyer = sentinel ObjectId 000000000000000000000001)
   buyer: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+
+  // Flag to distinguish guest orders
+  isGuest: { type: Boolean, default: false },
+
   items: [{
     product: { type: mongoose.Schema.Types.ObjectId, ref: "Product", required: true },
     seller: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
@@ -13,8 +19,8 @@ const orderSchema = new mongoose.Schema({
   deliveryInfo: {
     fullName: { type: String, required: true, trim: true },
     phone: { type: String, required: true, match: /^01[0125][0-9]{8}$/ },
-    address: { type: String, required: function () { return this.deliveryMethod === "home"; } },
-    pickupPoint: { type: mongoose.Schema.Types.ObjectId, ref: "PickupPoint", required: function () { return this.deliveryMethod === "pickup"; } }
+    address: { type: String },
+    pickupPoint: { type: mongoose.Schema.Types.ObjectId, ref: "PickupPoint" }
   },
   paymentMethod: { type: String, enum: ["cash", "card"], default: "cash" },
   paymentStatus: { type: String, enum: ["pending", "paid", "failed"], default: "pending" },
@@ -27,6 +33,16 @@ const orderSchema = new mongoose.Schema({
   isPrepared: { type: Boolean, default: false },
   secretCode: { type: String, unique: true, required: true },
 }, { timestamps: true });
+
+// ─── Performance Indexes ────────────────────────────────────────────────────
+orderSchema.index({ buyer: 1, createdAt: -1 });
+orderSchema.index({ "items.seller": 1, createdAt: -1 });
+orderSchema.index({ "items.seller": 1, deliveryStatus: 1 });
+orderSchema.index({ deliveryStatus: 1 });
+orderSchema.index({ payoutProcessed: 1, deliveryStatus: 1 });
+orderSchema.index({ "items.seller": 1, paymentStatus: 1, payoutProcessed: 1 });
+orderSchema.index({ paymentStatus: 1 });
+orderSchema.index({ isGuest: 1, createdAt: -1 });
 
 // 🚀 Fast Order Number Generation (No Blocking Database Calls)
 orderSchema.pre("save", function (next) {

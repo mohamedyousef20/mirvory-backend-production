@@ -22,7 +22,6 @@ export const searchProducts = async (req, res, next) => {
       sort = 'latest',
       availability
     } = req.query;
-    console.log(req.query, 'req.query')
     const pageNum = parseInt(page);
     const limitNum = Math.min(parseInt(limit), 50);
     const skip = (pageNum - 1) * limitNum;
@@ -61,7 +60,6 @@ export const searchProducts = async (req, res, next) => {
         { tags: regexFilter }
       ];
     }
-    console.log(filter, 'filter')
 
     // 3. جلب العدد الإجمالي للمنتجات المطابقة للفلتر الجديد
     const total = await Product.countDocuments(filter);
@@ -81,7 +79,6 @@ export const searchProducts = async (req, res, next) => {
       .skip(skip)
       .limit(limitNum)
       .lean();
-    console.log(products, 'productss')
 
     // 6. حفظ عملية البحث في سجل المستخدم (Search History)
     if (query && query.trim() && req.user) {

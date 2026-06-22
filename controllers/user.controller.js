@@ -79,7 +79,6 @@ export const getSellerForAdmin = async (req, res, next) => {
       .skip(skip)
       .limit(limit)
       .lean();
-    console.log(sellers, '12345688')
     res.status(200).json(formatPaginationResponse(sellers, total, req.pagination));
   } catch (error) {
     next(new createError(error.message, 500));
@@ -105,7 +104,6 @@ export const getUsersForAdmin = async (req, res, next) => {
       .skip(skip)
       .limit(limit)
       .lean();
-    console.log(total, 'user147')
     res.status(200).json(formatPaginationResponse(users, total, req.pagination));
   } catch (error) {
     next(new createError(error.message, 500));
@@ -407,7 +405,6 @@ export const resendVerification = async (req, res, next) => {
   try {
     const { email } = req.body;
     let user = email ? await User.findOne({ email }) : (req.user?._id ? await User.findById(req.user._id) : null);
-    console.log(user, '123456s')
     if (!user) return next(new createError("المستخدم غير موجود", 404));
     if (user.isVerified) return next(new createError("البريد الإلكتروني مفعل بالفعل", 400));
 

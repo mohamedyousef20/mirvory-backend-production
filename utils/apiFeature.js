@@ -75,7 +75,6 @@ class apiFeature {
         const page = parseInt(this.queryStr.page) || 1; //to convert it into number or parsInt
         const limit = parseInt(this.queryStr.limit) || 8;
         const skip = (page - 1) * limit;
-        console.log('skip', skip)
         const endIndex = page * limit;
         const pagination = {};
         pagination.page = page;

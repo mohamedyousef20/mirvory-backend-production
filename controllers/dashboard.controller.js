@@ -5,7 +5,6 @@ import User from '../models/user.model.js';
 // Seller Dashboard Controllers
 export const getSellerCounters = async (req, res) => {
   try {
-    console.log('getSellerCounters called, user:', req.user);
     const sellerId = req.user._id;
 
     // Get counts for seller's data

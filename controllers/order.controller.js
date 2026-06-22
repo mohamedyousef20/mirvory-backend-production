@@ -126,31 +126,36 @@ export const createOrder = async (req, res, next) => {
       secretCode,
     }]);
 
+    // Delete cart and skip redundant order.save() (order was just created)
     await Cart.findByIdAndDelete(cart._id);
-    await order.save();
 
-    (async () => {
+    // Fire-and-forget notifications (non-blocking)
+    setImmediate(async () => {
       try {
         const io = req.app.get("io");
         const sellerIds = [...new Set(cart.items.map(i => i.product.seller.toString()))];
 
-        for (const sellerId of sellerIds) {
-          await createNotifications({
-            io, title: "🔔 طلب جديد",
-            message: `لديك طلب جديد. رقم الطلب: ${order._id.toString().slice(-6)}`,
-            type: "ORDER_PLACED", actor: req.user._id, userId: sellerId,
-            data: { orderId: order._id }, link: `/seller/orders/${order._id}`,
-          });
-        }
-
-        await createNotifications({
-          io, title: "✅ تم استلام طلبك",
-          message: `تم استلام طلبك رقم #${order._id.toString().slice(-6)} بنجاح وسيتم تجهيزه`,
-          type: "ORDER_PLACED", actor: req.user._id, 
-          userId: req.user._id.toString(),
-          data: { orderId: order._id }, link: `/orders/${order._id}`,
-        });
-      } catch (err) { console.error("Notification Error:", err); }
+        // Parallel notifications to all sellers + buyer
+        await Promise.all([
+          ...sellerIds.map((sellerId) =>
+            createNotifications({
+              io, title: "🔔 طلب جديد",
+              message: `لديك طلب جديد. رقم الطلب: ${order._id.toString().slice(-6)}`,
+              type: "ORDER_PLACED", actor: req.user._id, userId: sellerId,
+              data: { orderId: order._id }, link: `/seller/orders/${order._id}`,
+            })
+          ),
+          createNotifications({
+            io, title: "✅ تم استلام طلبك",
+            message: `تم استلام طلبك رقم #${order._id.toString().slice(-6)} بنجاح وسيتم تجهيزه`,
+            type: "ORDER_PLACED", actor: req.user._id,
+            userId: req.user._id.toString(),
+            data: { orderId: order._id }, link: `/orders/${order._id}`,
+          }),
+        ]);
+      } catch (err) {
+        if (process.env.NODE_ENV !== 'production') console.error("Notification Error:", err);
+      }
     })();
 
     res.status(201).json({ status: "success", message: "تم إنشاء الطلب بنجاح", data: order });
@@ -181,50 +186,58 @@ export const orderComplete = async (req, res, next) => {
 
     // 2. حساب الأرباح وتوزيعها على البائعين (مع مهلة2 أيام)
     const releaseDate = new Date();
-    releaseDate.setDate(releaseDate.getDate() + 1); 
+    releaseDate.setDate(releaseDate.getDate() + 1);
 
+    // Aggregate earnings per seller
+    const sellerEarningsMap = {};
     for (const item of order.items) {
-      const sellerId = item.seller._id;
-      const amount = item.price * item.quantity;
-
-      // إضافة المبلغ للمحفظة المعلقة (Pending)
-      await User.findByIdAndUpdate(sellerId, {
-        $inc: { 'wallet.pendingBalance': amount },
-        $push: {
-          'wallet.pendingTransactions': {
-            orderId: order._id,
-            amount: amount,
-            releaseDate: releaseDate,
-            status: 'pending'
-          }
-        }
-      });
+      const sid = item.seller._id.toString();
+      sellerEarningsMap[sid] = (sellerEarningsMap[sid] || 0) + item.price * item.quantity;
     }
 
-    // 3. الإشعارات
-    (async () => {
+    // Parallel wallet updates using Promise.all
+    await Promise.all(
+      Object.entries(sellerEarningsMap).map(([sellerId, amount]) =>
+        User.findByIdAndUpdate(sellerId, {
+          $inc: { 'wallet.pendingBalance': amount },
+          $push: {
+            'wallet.pendingTransactions': {
+              orderId: order._id,
+              amount,
+              releaseDate,
+              status: 'pending',
+            },
+          },
+        })
+      )
+    );
+
+    // 3. الإشعارات (fire-and-forget)
+    setImmediate(async () => {
       try {
         const io = req.app.get("io");
-        // إشعار للمشتري
-        await createNotifications({
-          io, title: '📦 تم تسليم الطلب',
-          message: `تم تسليم طلبك بنجاح!`,
-          type: 'ORDER_COMPLETED', actor: req.user._id,
-          userId: order.buyer.toString(),
-          data: { orderId: order._id }, link: `/orders/${order._id}`,
-        });
-
-        // إشعار للبائعين
-        for (const item of order.items) {
-          await createNotifications({
-            io, title: '💵 أرباح معلقة',
-            message: `تم استلام الطلب #${order._id.toString().slice(-6)}. رصيدك سيصبح متاحاً بعد 7 أيام.`,
-            type: 'ORDER_DELIVERED', actor: req.user._id,
-            userId: item.seller._id.toString(),
-            data: { orderId: order._id }, link: `/vendor/dashboard`,
-          });
-        }
-      } catch (err) { console.error("Notification Error:", err); }
+        const sellerIds = Object.keys(sellerEarningsMap);
+        await Promise.all([
+          createNotifications({
+            io, title: '📦 تم تسليم الطلب',
+            message: 'تم تسليم طلبك بنجاح!',
+            type: 'ORDER_COMPLETED', actor: req.user._id,
+            userId: order.buyer.toString(),
+            data: { orderId: order._id }, link: `/orders/${order._id}`,
+          }),
+          ...sellerIds.map((sellerId) =>
+            createNotifications({
+              io, title: '💵 أرباح معلقة',
+              message: `تم استلام الطلب #${order._id.toString().slice(-6)}. رصيدك سيصبح متاحاً قريباً.`,
+              type: 'ORDER_DELIVERED', actor: req.user._id,
+              userId: sellerId,
+              data: { orderId: order._id }, link: '/vendor/dashboard',
+            })
+          ),
+        ]);
+      } catch (err) {
+        if (process.env.NODE_ENV !== 'production') console.error("Notification Error:", err);
+      }
     })();
 
     res.status(200).json({ message: 'تم استكمال الطلب وإضافة الأرباح للمعالجة' });
@@ -333,10 +346,10 @@ export const confirmPreparation = async (req, res, next) => {
 
     // 🔔 NOTIFICATION: Order Prepared
     if (anyUpdated) {
+      setImmediate(async () => {
         try {
           const io = req.app.get("io");
-          const adminUsers = await User.find({ role: 'admin' });
-
+          const adminUsers = await User.find({ role: 'admin' }).select('_id').lean();
           if (adminUsers.length > 0) {
             const productNames = sellerItems.map(it => it.product?.title || "Product");
             await createNotifications({
@@ -346,19 +359,14 @@ export const confirmPreparation = async (req, res, next) => {
               type: "ORDER_PREPARED",
               actor: req.user._id,
               userId: adminUsers.map(a => a._id.toString()),
-              data: {
-                orderId: order._id,
-                orderNumber: order.orderNumber,
-                products: productNames,
-                itemsCount: productNames.length,
-              },
+              data: { orderId: order._id, orderNumber: order.orderNumber, products: productNames, itemsCount: productNames.length },
               link: `/admin/orders/${order._id}`,
             });
           }
         } catch (err) {
-          console.error("Notification error:", err);
+          if (process.env.NODE_ENV !== 'production') console.error("Notification error:", err);
         }
-      
+      });
     }
 
     res.json({ message: anyUpdated ? 'success' : 'fail', orderPrepared: order.isPrepared, updatedItems: sellerItems.map(it => ({ _id: it._id, isPrepared: it.isPrepared })) });

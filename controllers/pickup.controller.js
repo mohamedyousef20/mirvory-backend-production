@@ -33,9 +33,7 @@ export const createPickupPoint = async (req, res, next) => {
 
 export const getPickupPoints = async (req, res, next) => {
   try {
-    console.log('inpi1')
     const pickupPoints = await PickupPoint.find({ status: 'active' }).lean();
-    console.log(pickupPoints,'4pickupPoints')
     res.status(200).json(pickupPoints);
   } catch (error) {
     next(error);

@@ -111,7 +111,6 @@ export const createProduct = async (req, res, next) => {
 
 export const updateProduct = async (req, res, next) => {
   try {
-    console.log(req.body, '458')
     const { id, ...updates } = req.body;
     if (!isValidObjectId(id)) throw new createError("معرف المنتج غير صالح", 400);
 
@@ -183,7 +182,6 @@ export const updateProduct = async (req, res, next) => {
 export const deleteProduct = async (req, res, next) => {
   try {
     const { id } = req.body;
-    console.log(id, '2523')
     if (!isValidObjectId(id)) throw new createError("معرف المنتج غير صالح", 400);
 
     const product = await Product.findById(id);
@@ -307,7 +305,6 @@ export const trustProduct = async (req, res, next) => {
 // ==========================================
 export const getProducts = async (req, res, next) => {
   try {
-    console.log('in2525')
     const { page, limit, skip } = req.pagination;
     const sortObj = req.sort || { createdAt: -1 };
     const filterObj = req.filter || {};
@@ -340,13 +337,18 @@ export const getProducts = async (req, res, next) => {
       }
     });
 
-    const total = await Product.countDocuments(filter);
-    const products = await Product.find(filter)
-      .populate('seller', 'firstName lastName')
-      .populate('category', 'name')
+    const [total, products] = await Promise.all([
+      Product.countDocuments(filter),
+      Product.find(filter)
+        .select('title images price discountedPrice discountPercentage ratings seller category status sold quantity')
+        .populate('seller', 'firstName lastName')
+        .populate('category', 'name')
+        .sort(sortObj)
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
 
-    console.log(products, '256')
-    console.log(total, '257')
     res.status(200).json(formatPaginationResponse(products, total, req.pagination));
   } catch (error) { next(error); }
 };
@@ -359,12 +361,14 @@ export const getProductsForAdmin = async (req, res, next) => {
     const filterObj = req.filter || {};
 
     const filter = { ...filterObj };
-    const total = await Product.countDocuments(filter);
-    const products = await Product.find(filter)
-      .populate('seller', 'firstName lastName email')
-      .populate('category', 'name nameEn')
-      .sort(sortObj)
-      .skip(skip).limit(limit).lean();
+    const [total, products] = await Promise.all([
+      Product.countDocuments(filter),
+      Product.find(filter)
+        .populate('seller', 'firstName lastName email')
+        .populate('category', 'name nameEn')
+        .sort(sortObj)
+        .skip(skip).limit(limit).lean(),
+    ]);
 
     res.status(200).json(formatPaginationResponse(products, total, req.pagination));
   } catch (error) { next(error); }
@@ -377,11 +381,13 @@ export const getSellerProducts = async (req, res, next) => {
     const filterObj = req.filter || {};
 
     const filter = { seller: req.user._id, status: { $ne: 'deleted' }, ...filterObj };
-    const total = await Product.countDocuments(filter);
-    const products = await Product.find(filter)
-      .populate('category', 'name nameEn')
-      .sort(sortObj)
-      .skip(skip).limit(limit).lean();
+    const [total, products] = await Promise.all([
+      Product.countDocuments(filter),
+      Product.find(filter)
+        .populate('category', 'name nameEn')
+        .sort(sortObj)
+        .skip(skip).limit(limit).lean(),
+    ]);
 
     res.status(200).json(formatPaginationResponse(products, total, req.pagination));
   } catch (error) { next(error); }

@@ -30,9 +30,7 @@ export const getCategoryById = async (req, res) => {
 // Create category
 export const createCategory = async (req, res) => {
   try {
-    console.log(req.body)
     const category = await Category.create(req.body);
-    await category.save();
     res.status(201).json(category);
   } catch (error) {
     res.status(400).json({ message: error.message });
