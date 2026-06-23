@@ -16,10 +16,9 @@ import { updateUserValid } from '../validations/user/updateUserValid.js';
 import { paginate } from '../middlewares/pagination.js';
 import { sort } from '../middlewares/sort.js';
 import { search, buildFilter, commonFilters } from '../middlewares/search.js';
-import { authLimiter, passwordResetLimiter, searchLimiter } from '../server.js';
+import { authLimiter, passwordResetLimiter, searchLimiter } from '../middlewares/rateLimiters.js';
 
 const router = express.Router();
-
 // ─── Public routes ────────────────────────────────────────────────────────────
 router.post('/register', authLimiter, registerUserValid, register);
 router.post('/login', authLimiter, loginUserValid, login);

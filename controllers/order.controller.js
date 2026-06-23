@@ -130,7 +130,7 @@ export const createOrder = async (req, res, next) => {
     await Cart.findByIdAndDelete(cart._id);
 
     // Fire-and-forget notifications (non-blocking)
-    setImmediate(async () => {
+    (async () => {
       try {
         const io = req.app.get("io");
         const sellerIds = [...new Set(cart.items.map(i => i.product.seller.toString()))];
@@ -213,7 +213,7 @@ export const orderComplete = async (req, res, next) => {
     );
 
     // 3. الإشعارات (fire-and-forget)
-    setImmediate(async () => {
+    (async () => {
       try {
         const io = req.app.get("io");
         const sellerIds = Object.keys(sellerEarningsMap);
@@ -346,7 +346,7 @@ export const confirmPreparation = async (req, res, next) => {
 
     // 🔔 NOTIFICATION: Order Prepared
     if (anyUpdated) {
-      setImmediate(async () => {
+      (async () => {
         try {
           const io = req.app.get("io");
           const adminUsers = await User.find({ role: 'admin' }).select('_id').lean();
