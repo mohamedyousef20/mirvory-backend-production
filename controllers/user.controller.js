@@ -13,6 +13,19 @@ import { formatPaginationResponse } from '../middlewares/pagination.js';
 // ==========================================
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
+// دالة تحويل صيغ الوقت النصية إلى ميلي ثانية لمنع دمج النصوص
+const parseDurationToMs = (durationStr) => {
+  if (!durationStr) return 0;
+  const numericValue = parseInt(durationStr, 10);
+  if (isNaN(numericValue)) return 0;
+
+  if (durationStr.endsWith('d')) return numericValue * 24 * 60 * 60 * 1000; // أيام
+  if (durationStr.endsWith('h')) return numericValue * 60 * 60 * 1000;      // ساعات
+  if (durationStr.endsWith('m')) return numericValue * 60 * 1000;          // دقائق
+  if (durationStr.endsWith('s')) return numericValue * 1000;               // ثواني
+
+  return numericValue;
+};
 // ==========================================
 // 🔍 SEARCH & LISTING
 // ==========================================
@@ -214,7 +227,7 @@ export const login = async (req, res, next) => {
     );
 
     // 🔄 TOKEN ROTATION: Store refresh token in user document
-    const refreshTokenExpiry = new Date(Date.now() + process.env.JWT_REFRESH_EXPIRE);
+    const refreshTokenExpiry = new Date(Date.now() + parseDurationToMs(process.env.JWT_REFRESH_EXPIRE));
     user.refreshTokens = user.refreshTokens || [];
     user.refreshTokens.push({
       token: refreshToken,
@@ -315,8 +328,7 @@ export const refreshToken = async (req, res, next) => {
 
     // 🔄 ROTATION: Remove old token and add new one
     user.refreshTokens = user.refreshTokens.filter(rt => rt.token !== refreshToken);
-    const newRefreshTokenExpiry = new Date(Date.now() + process.env.JWT_REFRESH_EXPIRE);
-    user.refreshTokens.push({
+    const newRefreshTokenExpiry = new Date(Date.now() + parseDurationToMs(refreshExpireConfig));    user.refreshTokens.push({
       token: newRefreshToken,
       createdAt: new Date(),
       expiresAt: newRefreshTokenExpiry
@@ -907,6 +919,7 @@ export const googleAuth = async (req, res, next) => {
 };
 
 // 🔐 SOCIAL COOKIE SETTING ENDPOINT - For NextAuth integration
+// 🔐 SOCIAL COOKIE SETTING ENDPOINT - تم تأمينه ضد التزوير والحقن
 export const setSocialCookies = async (req, res, next) => {
   try {
     const { accessToken, refreshToken, role } = req.body;
@@ -915,13 +928,27 @@ export const setSocialCookies = async (req, res, next) => {
       return next(new createError("Access token and refresh token are required", 400));
     }
 
-    // Set cookies with secure configuration
+    // 🛡️ الفحص الأمني: التحقق من التوقيع الرقمي للتوكنات ومطابقتها للمفاتيح السرية للخادم
+    try {
+      // التحقق من صلاحية وتوقيع Access Token
+      jwt.verify(accessToken, process.env.JWT_SECRET);
+
+      // التحقق من صلاحية وتوقيع Refresh Token
+      jwt.verify(refreshToken, process.env.REFRESH_SECRET);
+    } catch (jwtError) {
+      // في حال فشل التحقق (توكن مزور، تالف، أو منتهي الصلاحية) يتم رفض الطلب فوراً
+      console.error("JWT Verification failed in setSocialCookies:", jwtError.message);
+      return next(new createError("الرموز الأمنية ممررة بشكل خاطئ أو تم التلاعب بها", 401));
+    }
+
+    // إعداد ملفات تعريف الارتباط بعد التأكد من سلامتها أمنياً
     const isProduction = process.env.NODE_ENV === "production";
+
     res.cookie("accessToken", accessToken, {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "strict" : "lax",
-      maxAge: Number(process.env.COOKIE_EXPIRE),
+      maxAge: Number(process.env.COOKIE_EXPIRE) || 15 * 60 * 1000,
       path: '/'
     });
 
@@ -929,13 +956,16 @@ export const setSocialCookies = async (req, res, next) => {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "strict" : "lax",
-      maxAge: Number(process.env.COOKIE_REFRESH_EXPIRE),
+      maxAge: Number(process.env.COOKIE_REFRESH_EXPIRE) || 7 * 24 * 60 * 60 * 1000,
       path: '/'
     });
 
-    res.status(200).json({ success: true });
+    res.status(200).json({
+      success: true,
+      message: "تم التحقق من الرموز وضبط ملفات تعريف الارتباط بنجاح"
+    });
   } catch (error) {
     console.error('Set Social Cookies Error:', error);
-    next(new createError("Failed to set social cookies", 500));
+    next(new createError("حدث خطأ داخلي أثناء معالجة البيانات الأمنية", 500));
   }
 };

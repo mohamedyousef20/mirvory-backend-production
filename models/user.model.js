@@ -49,6 +49,7 @@ const vendorSchema = new mongoose.Schema(
     phone: {
       type: String,
       required: [true, "Vendor phone is required"],
+      partialFilterExpression: { phone: { $type: "string" } },
       validate: {
         validator: function (v) {
           return /^01[0125][0-9]{8}$/.test(v);

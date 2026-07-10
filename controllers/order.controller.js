@@ -98,7 +98,7 @@ export const createOrder = async (req, res, next) => {
     );
     const discount = cart.appliedCoupon?.discountAmount || 0;
 
-    const shippingFee = (subtotal > 500 || deliveryMethod === "pickup") ? 0 : 70;
+    const shippingFee = (subtotal > 4000 || deliveryMethod === "pickup") ? 0 : 70;
     const total = Math.max(0, subtotal - discount + shippingFee);
     const secretCode = await generateUniqueSecretCode(req.user._id);
 
@@ -449,7 +449,7 @@ export const getVendorEarnings = async (req, res, next) => {
       order.items.forEach(item => {
         if (item.seller.toString() === req.params.vendorId) {
           const itemTotal = item.price * item.quantity;
-          const fee = itemTotal < 300 ? 0.12 : itemTotal <= 799 ? 0.10 : itemTotal <= 1999 ? 0.8: 0.6;
+          const fee = itemTotal < 300 ? 0.12 : itemTotal <= 799 ? 0.10 : itemTotal <= 1999 ? 0.08 : 0.06;
           earnings += itemTotal * (1 - fee);
         }
       });

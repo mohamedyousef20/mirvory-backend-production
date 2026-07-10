@@ -12,7 +12,6 @@ export const getCart = asyncHandler(async (req, res, next) => {
 });
 
 export const addToCart = asyncHandler(async (req, res, next) => {
-  console.log('inaddd')
   const { productId } = req.body;
   let { quantity = 1, sizes, colors } = req.body;
 

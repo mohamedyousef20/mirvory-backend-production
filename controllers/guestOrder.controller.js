@@ -37,8 +37,8 @@ export const createGuestOrder = async (req, res, next) => {
       guestEmail,
       guestPhone,
       items,            // [{ productId, quantity, size?, color? }]
-      deliveryMethod = 'home',
-      paymentMethod = 'cash',
+      deliveryMethod,
+      paymentMethod,
       deliveryInfo,     // { address?, pickupPoint? }
     } = req.body;
 
@@ -120,7 +120,7 @@ export const createGuestOrder = async (req, res, next) => {
       };
     });
 
-    const shippingFee = (subtotal > 500 || deliveryMethod === 'pickup') ? 0 : 70;
+    const shippingFee = (subtotal > 4000 || deliveryMethod === 'pickup') ? 0 : 70;
     const total = Math.max(0, subtotal + shippingFee);
 
     // ── 6. Create a placeholder buyer (guest sentinel) ───────────────
