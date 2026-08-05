@@ -13,6 +13,23 @@ import { formatPaginationResponse } from '../middlewares/pagination.js';
 // ==========================================
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
+// Default cookie maxAge values (milliseconds) used when env vars are absent.
+// COOKIE_EXPIRE        = access-token lifetime  (default: 15 minutes)
+// COOKIE_REFRESH_EXPIRE = refresh-token lifetime (default: 7 days)
+const DEFAULT_ACCESS_COOKIE_MS  = 15 * 60 * 1000;          // 15 min
+const DEFAULT_REFRESH_COOKIE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+/**
+ * Safe cookie maxAge helper.
+ * Number(undefined) === NaN, which Express treats as "no maxAge" → session cookie.
+ * A session cookie disappears when the tab/browser closes, so the user is
+ * immediately logged out on the next visit.  Always fall back to a sane default.
+ */
+const cookieMaxAge = (envVar, defaultMs) => {
+  const parsed = parseInt(envVar, 10);
+  return isNaN(parsed) || parsed <= 0 ? defaultMs : parsed;
+};
+
 // دالة تحويل صيغ الوقت النصية إلى ميلي ثانية لمنع دمج النصوص
 const parseDurationToMs = (durationStr) => {
   if (!durationStr) return 0;
@@ -248,16 +265,16 @@ export const login = async (req, res, next) => {
     res.cookie("accessToken", token, {
       httpOnly: true,
       secure: isProduction,
-sameSite: isProduction ? "none" : "lax",
-      maxAge: Number(process.env.COOKIE_EXPIRE),
+      sameSite: isProduction ? "none" : "lax",
+      maxAge: cookieMaxAge(process.env.COOKIE_EXPIRE, DEFAULT_ACCESS_COOKIE_MS),
       path: '/'
     });
 
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
       secure: isProduction,
-sameSite: isProduction ? "none" : "lax",
-      maxAge: Number(process.env.COOKIE_REFRESH_EXPIRE),
+      sameSite: isProduction ? "none" : "lax",
+      maxAge: cookieMaxAge(process.env.COOKIE_REFRESH_EXPIRE, DEFAULT_REFRESH_COOKIE_MS),
       path: '/'
     });
 
@@ -351,16 +368,16 @@ export const refreshToken = async (req, res, next) => {
     res.cookie("accessToken", newAccessToken, {
       httpOnly: true,
       secure: isProduction,
-sameSite: isProduction ? "none" : "lax",
-      maxAge: Number(process.env.COOKIE_EXPIRE),
+      sameSite: isProduction ? "none" : "lax",
+      maxAge: cookieMaxAge(process.env.COOKIE_EXPIRE, DEFAULT_ACCESS_COOKIE_MS),
       path: '/'
     });
 
     res.cookie("refreshToken", newRefreshToken, {
       httpOnly: true,
       secure: isProduction,
-sameSite: isProduction ? "none" : "lax",
-      maxAge: Number(process.env.COOKIE_REFRESH_EXPIRE),
+      sameSite: isProduction ? "none" : "lax",
+      maxAge: cookieMaxAge(process.env.COOKIE_REFRESH_EXPIRE, DEFAULT_REFRESH_COOKIE_MS),
       path: '/'
     });
 
@@ -899,16 +916,16 @@ export const googleAuth = async (req, res, next) => {
     res.cookie("accessToken", token, {
       httpOnly: true,
       secure: isProduction,
-sameSite: isProduction ? "none" : "lax",
-      maxAge: Number(process.env.COOKIE_EXPIRE),
+      sameSite: isProduction ? "none" : "lax",
+      maxAge: cookieMaxAge(process.env.COOKIE_EXPIRE, DEFAULT_ACCESS_COOKIE_MS),
       path: '/'
     });
 
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
       secure: isProduction,
-sameSite: isProduction ? "none" : "lax",
-      maxAge: Number(process.env.COOKIE_REFRESH_EXPIRE),
+      sameSite: isProduction ? "none" : "lax",
+      maxAge: cookieMaxAge(process.env.COOKIE_REFRESH_EXPIRE, DEFAULT_REFRESH_COOKIE_MS),
       path: '/'
     });
 
@@ -952,16 +969,16 @@ export const setSocialCookies = async (req, res, next) => {
     res.cookie("accessToken", accessToken, {
       httpOnly: true,
       secure: isProduction,
-sameSite: isProduction ? "none" : "lax",
-      maxAge: Number(process.env.COOKIE_EXPIRE) || 15 * 60 * 1000,
+      sameSite: isProduction ? "none" : "lax",
+      maxAge: cookieMaxAge(process.env.COOKIE_EXPIRE, DEFAULT_ACCESS_COOKIE_MS),
       path: '/'
     });
 
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
       secure: isProduction,
-sameSite: isProduction ? "none" : "lax",
-      maxAge: Number(process.env.COOKIE_REFRESH_EXPIRE) || 7 * 24 * 60 * 60 * 1000,
+      sameSite: isProduction ? "none" : "lax",
+      maxAge: cookieMaxAge(process.env.COOKIE_REFRESH_EXPIRE, DEFAULT_REFRESH_COOKIE_MS),
       path: '/'
     });
 
