@@ -340,7 +340,6 @@ export const getProducts = async (req, res, next) => {
     const [total, products] = await Promise.all([
       Product.countDocuments(filter),
       Product.find(filter)
-        .select('title images price discountedPrice discountPercentage ratings seller category status sold quantity')
         .populate('seller', 'firstName lastName')
         .populate('category', 'name')
         .sort(sortObj)
