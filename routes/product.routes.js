@@ -34,7 +34,6 @@ import { sort } from '../middlewares/sort.js';
 import { buildFilter, commonFilters } from '../middlewares/search.js';
 
 
-const router = express.Router({ mergeParams: true });
 
 // مسارات المسؤول
 router.get('/admin-products', protect, isAdmin, paginate(12), sort(), buildFilter(commonFilters.product),  getProductsForAdmin);
