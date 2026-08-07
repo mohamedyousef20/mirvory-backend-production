@@ -103,7 +103,7 @@ export const validateCouponCode = async (req, res, next) => {
             validFrom: { $lte: new Date() }, validUntil: { $gte: new Date() }
         });
 
-        if (!coupon) throw createError("كود الخصم غير صالح أو منتهي الصلاحية", 400);
+        if (!coupon) throw new createError("كود الخصم غير صالح أو منتهي الصلاحية", 400);
         if (cartTotal < coupon.minCartValue) throw createError(`يجب أن تكون السلة بقيمة ${coupon.minCartValue} كحد أدنى لتطبيق الخصم`, 400);
         if (coupon.usageLimit && coupon.usedCount >= coupon.usageLimit) throw createError("تم تجاوز الحد الأقصى لاستخدام الكوبون", 400);
 
