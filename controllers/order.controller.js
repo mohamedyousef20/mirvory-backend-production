@@ -65,7 +65,7 @@ export const createOrderFilterObj = (req, res, next) => {
 };
 
 export const createOrder = async (req, res, next) => {
- 
+
   try {
     const { deliveryMethod, paymentMethod, deliveryInfo } = req.body;
 
