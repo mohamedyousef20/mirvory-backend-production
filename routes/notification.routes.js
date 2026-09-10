@@ -30,7 +30,7 @@ router.get('/unread-count', getUnreadCount);
 router.get('/count', getUnreadCount);
 router.get('/poll', pollLimiter, pollNotifications); // Polling fallback (Socket.IO disabled)
 router.patch('/read', markAsRead);
-router.put('/read-all', markAllAsRead);
+router.patch('/read-all', markAllAsRead);
 
 // Admin-only routes
 router.post('/', isAdmin, sendNotification);
