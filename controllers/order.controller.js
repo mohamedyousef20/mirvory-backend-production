@@ -396,23 +396,40 @@ export const getAdminOrders = async (req, res, next) => {
 export const getUserOrders = async (req, res, next) => {
   try {
     const { page, limit, skip } = req.pagination;
+
     const sortObj = req.sort || { createdAt: -1 };
     const filterObj = req.filter || {};
     const searchFilter = req.searchFilter || {};
 
-    const filter = { buyer: req.user._id, ...filterObj, ...searchFilter };
+    const filter = {
+      buyer: req.user._id,
+      ...filterObj,
+      ...searchFilter
+    };
 
     const total = await Order.countDocuments(filter);
+
     const orders = await Order.find(filter)
+      .populate({
+        path: 'items.product',
+        select: 'title titleEn name images price discountedPrice'
+      })
       .sort(sortObj)
       .skip(skip)
       .limit(limit)
       .lean();
 
-    res.json(formatPaginationResponse(orders, total, req.pagination));
-  } catch (err) { next(err); }
+    res.json(
+      formatPaginationResponse(
+        orders,
+        total,
+        req.pagination
+      )
+    );
+  } catch (err) {
+    next(err);
+  }
 };
-
 export const getSellerOrders = async (req, res, next) => {
   try {
     const { page, limit, skip } = req.pagination;
