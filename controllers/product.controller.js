@@ -4,6 +4,8 @@ import mongoose from 'mongoose';
 import { createNotifications } from '../utils/notification.js';
 import createError from '../utils/error.js';
 import { formatPaginationResponse } from '../middlewares/pagination.js';
+import { uploadImage, removeImage } from '../services/imageUploadService.js';
+import cloudinary from '../config/cloudinary.js';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
@@ -32,16 +34,44 @@ export const createProduct = async (req, res, next) => {
     }
 
     let colors = [];
+
     if (productData.colors) {
       try {
-        colors = typeof productData.colors === 'string' ? JSON.parse(productData.colors) : productData.colors;
-        if (!Array.isArray(colors)) colors = [colors];
-      } catch (e) { colors = [productData.colors]; }
+        colors =
+          typeof productData.colors === 'string'
+            ? JSON.parse(productData.colors)
+            : productData.colors;
+
+        if (!Array.isArray(colors)) {
+          colors = [colors];
+        }
+      } catch (e) {
+        colors = [productData.colors];
+      }
 
       if (colors.length > 0) {
-        const isValidColors = colors.every(c => c && typeof c === 'object' && c.name && c.value);
-        if (!isValidColors) throw new createError("صيغة الألوان غير صحيحة", 400);
-        colors = colors.map(c => ({ name: c.name, value: c.value, available: c.available !== false }));
+        const isValidColors = colors.every(
+          c =>
+            c &&
+            typeof c === 'object' &&
+            c.name &&
+            c.value &&
+            c.image
+        );
+
+        if (!isValidColors) {
+          throw new createError(
+            "كل لون يجب أن يحتوي على الاسم والقيمة وصورة اللون",
+            400
+          );
+        }
+
+        colors = colors.map(c => ({
+          name: c.name,
+          value: c.value,
+          image: c.image,
+          available: c.available !== false
+        }));
       }
     }
 
@@ -90,15 +120,15 @@ export const createProduct = async (req, res, next) => {
         const io = req.app.get("io");
         const admin = await User.findOne({ role: 'admin' }).select('_id');
 
-          await createNotifications({
-            io, title: '📦 منتج جديد للمراجعة',
-            message: `تم إضافة منتج جديد "${product.title}" بواسطة ${product.seller.firstName}`,
-            type: 'PRODUCT_SUBMITTED',
-            actor: req.user._id,
-            userId: admin._id.toString(),
-            data: { productId: product._id }, link: `/products/${product._id}`,
-          });
-        
+        await createNotifications({
+          io, title: '📦 منتج جديد للمراجعة',
+          message: `تم إضافة منتج جديد "${product.title}" بواسطة ${product.seller.firstName}`,
+          type: 'PRODUCT_SUBMITTED',
+          actor: req.user._id,
+          userId: admin._id.toString(),
+          data: { productId: product._id }, link: `/products/${product._id}`,
+        });
+
       } catch (err) { console.error("Notification Error:", err); }
     })();
 
@@ -111,43 +141,147 @@ export const createProduct = async (req, res, next) => {
 
 export const updateProduct = async (req, res, next) => {
   try {
-    const { id, ...updates } = req.body;
-    if (!isValidObjectId(id)) throw new createError("معرف المنتج غير صالح", 400);
+    const productId = req.params.id 
+    if (!isValidObjectId(productId)) throw new createError("معرف المنتج غير صالح", 400);
 
-    const product = await Product.findById(id);
+    const product = await Product.findById(productId);
 
     if (!product) throw new createError("المنتج غير موجود", 404);
 
-    if (product.seller.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+    // Check authorization: admin can edit any product, seller can only edit their own
+    if (product.seller.toString() !== req.user._id.toString() && req.user.role !== 'admin' && req.user.role !== 'super_admin') {
       throw new createError("غير مصرح لك بتحديث هذا المنتج", 403);
     }
 
-    if (updates.images && Array.isArray(updates.images)) product.images = updates.images;
+    // Handle FormData with files
+    const hasFiles = req.files && req.files.length > 0;
+    const updates = req.body;
 
-    if (updates.sizes !== undefined) {
-      try {
-        product.sizes = typeof updates.sizes === 'string' ? JSON.parse(updates.sizes) : (Array.isArray(updates.sizes) ? updates.sizes : [updates.sizes]);
-      } catch (e) { product.sizes = updates.sizes; }
+    // Parse JSON fields if they come as strings
+    let parsedUpdates = { ...updates };
+    ['sizes', 'colors', 'images', 'deletedImages', 'deletedColorImages'].forEach(field => {
+      if (parsedUpdates[field] && typeof parsedUpdates[field] === 'string') {
+        try {
+          parsedUpdates[field] = JSON.parse(parsedUpdates[field]);
+        } catch (e) {
+          // Keep as is if parsing fails
+        }
+      }
+    });
+
+    // Extract public_ids from old images for deletion
+    const oldImages = product.images || [];
+    const deletedImages = parsedUpdates.deletedImages || [];
+    const imagesToKeep = parsedUpdates.images || [];
+
+    // Delete old images from Cloudinary that are not in the keep list
+    const imagesToDelete = oldImages.filter(img => {
+      // Extract public_id from Cloudinary URL
+      const publicId = img.split('/').pop().split('.')[0];
+      return deletedImages.includes(img) || (!imagesToKeep.includes(img) && !deletedImages.includes(img));
+    });
+
+    // Delete images from Cloudinary
+    if (imagesToDelete.length > 0) {
+      for (const imageUrl of imagesToDelete) {
+        try {
+          // Extract public_id from Cloudinary URL
+          // URL format: https://res.cloudinary.com/cloud_name/image/upload/v1234567890/mirvory/public_id.jpg
+          const urlParts = imageUrl.split('/');
+          const fileName = urlParts[urlParts.length - 1];
+          const publicId = fileName.split('.')[0];
+          const fullPublicId = `mirvory/${publicId}`;
+          
+          await cloudinary.uploader.destroy(fullPublicId);
+          console.log(`Deleted image from Cloudinary: ${fullPublicId}`);
+        } catch (error) {
+          console.error(`Failed to delete image ${imageUrl}:`, error);
+          // Continue even if deletion fails
+        }
+      }
     }
 
-    if (updates.price !== undefined || updates.discountPercentage !== undefined) {
-      const price = updates.price !== undefined ? parseFloat(updates.price) : product.price;
-      const discountPercentage = updates.discountPercentage !== undefined ? parseFloat(updates.discountPercentage) : product.discountPercentage;
+    // Upload new images if any
+    let newImageUrls = [];
+    if (hasFiles) {
+      for (const file of req.files) {
+        try {
+          const uploadResult = await uploadImage(file);
+          newImageUrls.push(uploadResult.url);
+        } catch (error) {
+          console.error('Failed to upload image:', error);
+          throw new createError('فشل في رفع الصور', 500);
+        }
+      }
+    }
+
+    // Combine kept images with new images
+    product.images = [...imagesToKeep, ...newImageUrls];
+
+    // Update sizes
+    if (parsedUpdates.sizes !== undefined) {
+      try {
+        product.sizes = typeof parsedUpdates.sizes === 'string' ? JSON.parse(parsedUpdates.sizes) : (Array.isArray(parsedUpdates.sizes) ? parsedUpdates.sizes : [parsedUpdates.sizes]);
+      } catch (e) { product.sizes = parsedUpdates.sizes; }
+    }
+
+    // Update colors
+    if (parsedUpdates.colors !== undefined) {
+      try {
+        let colors = typeof parsedUpdates.colors === 'string' ? JSON.parse(parsedUpdates.colors) : parsedUpdates.colors;
+        
+        // Handle color image deletions
+        if (parsedUpdates.deletedColorImages && Array.isArray(parsedUpdates.deletedColorImages)) {
+          for (const colorImageUrl of parsedUpdates.deletedColorImages) {
+            try {
+              const urlParts = colorImageUrl.split('/');
+              const fileName = urlParts[urlParts.length - 1];
+              const publicId = fileName.split('.')[0];
+              const fullPublicId = `mirvory/${publicId}`;
+              
+              await cloudinary.uploader.destroy(fullPublicId);
+              console.log(`Deleted color image from Cloudinary: ${fullPublicId}`);
+            } catch (error) {
+              console.error(`Failed to delete color image ${colorImageUrl}:`, error);
+            }
+          }
+        }
+
+        // Validate colors structure
+        if (Array.isArray(colors)) {
+          colors = colors.map(c => ({
+            name: c.name,
+            value: c.value,
+            image: c.image,
+            available: c.available !== false
+          }));
+        }
+        product.colors = colors;
+      } catch (e) { product.colors = parsedUpdates.colors; }
+    }
+
+    // Update price and discount
+    if (parsedUpdates.price !== undefined || parsedUpdates.discountPercentage !== undefined) {
+      const price = parsedUpdates.price !== undefined ? parseFloat(parsedUpdates.price) : product.price;
+      const discountPercentage = parsedUpdates.discountPercentage !== undefined ? parseFloat(parsedUpdates.discountPercentage) : product.discountPercentage;
       product.price = price;
       product.discountPercentage = discountPercentage;
       product.discountedPrice = price - (price * (discountPercentage / 100));
     }
 
-    const allowedUpdates = ['title', 'description', 'quantity', 'category', 'isFeatured', 'sellerPercentage'];
+    // Update other fields
+    const allowedUpdates = ['title', 'description', 'quantity', 'category', 'isFeatured', 'sellerPercentage', 'brand', 'tags', 'isTrusted'];
     allowedUpdates.forEach(key => {
-      if (updates[key] !== undefined) {
-        if (key === 'quantity' || key === 'sellerPercentage') product[key] = parseFloat(updates[key]);
-        else if (key === 'isFeatured') product[key] = (updates[key] === 'true' || updates[key] === true);
-        else product[key] = updates[key];
+      if (parsedUpdates[key] !== undefined) {
+        if (key === 'quantity' || key === 'sellerPercentage') product[key] = parseFloat(parsedUpdates[key]);
+        else if (key === 'isFeatured' || key === 'isTrusted') product[key] = (parsedUpdates[key] === 'true' || parsedUpdates[key] === true);
+        else if (key === 'tags' && typeof parsedUpdates[key] === 'string') product[key] = parsedUpdates[key].split(',').map(t => t.trim());
+        else product[key] = parsedUpdates[key];
       }
     });
 
-    const requiresReapproval = req.user.role !== 'admin';
+    // Set reapproval status for non-admin updates
+    const requiresReapproval = req.user.role !== 'admin' && req.user.role !== 'super_admin';
     if (requiresReapproval) {
       product.isApproved = false;
       product.status = 'pending';
@@ -163,14 +297,14 @@ export const updateProduct = async (req, res, next) => {
         try {
           const io = req.app.get("io");
           const admin = await User.findOne({ role: 'admin' }).select('_id');
-            await createNotifications({
-              io, title: '📦 تحديث منتج للمراجعة',
-              message: `تم تعديل منتج "${updatedProduct.title}" ويحتاج إلى مراجعة جديدة`,
-              type: 'PRODUCT_UPDATED', actor: req.user._id,
-              userId: admin._id.toString(),
-              data: { productId: updatedProduct._id }, link: `/admin/products/${updatedProduct._id}`,
-            });
-          
+          await createNotifications({
+            io, title: '📦 تحديث منتج للمراجعة',
+            message: `تم تعديل منتج "${updatedProduct.title}" ويحتاج إلى مراجعة جديدة`,
+            type: 'PRODUCT_UPDATED', actor: req.user._id,
+            userId: admin._id.toString(),
+            data: { productId: updatedProduct._id }, link: `/admin/products/${updatedProduct._id}`,
+          });
+
         } catch (err) { console.error(err); }
       })();
     }

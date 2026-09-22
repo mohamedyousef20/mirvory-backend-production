@@ -51,17 +51,35 @@ export const addToCart = asyncHandler(async (req, res, next) => {
     const currentSize = sizes.length ? sizes[i] : null;
     const currentColor = colors.length ? colors[i] : null;
 
+    const selectedColor = currentColor
+      ? product.colors?.find(
+        color => color.value === currentColor
+      )
+      : null;
+
+    const selectedColorImage = selectedColor?.image || product.images?.[0] || null;
+
     const existingItem = cart.items.find(item =>
       item.product.toString() === productId &&
       (item.sizes[0] || null) === currentSize &&
       (item.colors[0] || null) === currentColor
     );
 
-    if (existingItem) existingItem.quantity += 1;
-    else {
+    if (existingItem) {
+      existingItem.quantity += 1;
+
+      // Keep the selected color image synchronized
+      if (selectedColorImage) {
+        existingItem.image = selectedColorImage;
+      }
+    } else {
       cart.items.push({
-        product: productId, quantity: 1, price: product.price,
-        sizes: currentSize ? [currentSize] : [], colors: currentColor ? [currentColor] : []
+        product: productId,
+        quantity: 1,
+        price: product.price,
+        sizes: currentSize ? [currentSize] : [],
+        colors: currentColor ? [currentColor] : [],
+        image: selectedColorImage
       });
     }
   }

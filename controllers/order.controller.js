@@ -2,10 +2,12 @@ import Order from '../models/order.model.js';
 import Product from '../models/product.model.js';
 import User from '../models/user.model.js';
 import Cart from '../models/cart.model.js';
+import ShippingSettings from '../models/shippingSettings.model.js';
 import mongoose from 'mongoose';
 import createError from '../utils/error.js';
 import { createNotifications } from '../utils/notification.js';
 import { formatPaginationResponse } from '../middlewares/pagination.js';
+import { earnPointsFromOrder } from './loyalty.controller.js';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 const getEffectivePrice = (product) => {
@@ -74,7 +76,10 @@ export const createOrder = async (req, res, next) => {
     }
 
     const cart = await Cart.findOne({ user: req.user._id })
-      .populate({ path: "items.product", select: "price seller quantity title" })
+      .populate({
+        path: "items.product",
+        select: "price seller quantity title images colors"
+      });
 
     if (!cart || cart.items.length === 0) {
       throw new createError("السلة فارغة", 404);
@@ -98,10 +103,41 @@ export const createOrder = async (req, res, next) => {
     );
     const discount = cart.appliedCoupon?.discountAmount || 0;
 
-    const shippingFee = (subtotal >= 2000 || deliveryMethod === "pickup") ? 0 : 70;
+    // Get shipping settings and calculate shipping fee
+    const shippingSettings = await ShippingSettings.getSettings();
+    let shippingFee = shippingSettings.shippingFee;
+
+    // Free shipping based on minimum order
+    if (shippingSettings.freeShippingEnabled && subtotal >= shippingSettings.freeShippingMinimum) {
+      shippingFee = 0;
+    }
+
+    // Free pickup shipping
+    if (shippingSettings.freePickupShipping && deliveryMethod === 'pickup') {
+      shippingFee = 0;
+    }
+
+    // Free metro shipping (if address is provided)
+    if (shippingSettings.freeMetroShipping && deliveryInfo.address) {
+      const isMetro = shippingSettings.metroAreas?.some(area =>
+        deliveryInfo.address.toLowerCase().includes(area.toLowerCase())
+      );
+      if (isMetro) {
+        shippingFee = 0;
+      }
+    }
+
     const total = Math.max(0, subtotal - discount + shippingFee);
     const secretCode = await generateUniqueSecretCode(req.user._id);
-
+    console.log(
+      "CART ITEMS BEFORE ORDER:",
+      cart.items.map(item => ({
+        product: item.product?._id,
+        colors: item.colors,
+        image: item.image,
+        productFirstImage: item.product?.images?.[0]
+      }))
+    );
     const [order] = await Order.create([{
       buyer: req.user._id,
       items: cart.items.map((item) => ({
@@ -109,7 +145,11 @@ export const createOrder = async (req, res, next) => {
         seller: item.product.seller,
         quantity: item.quantity,
         price: getEffectivePrice(item.product),
-        size: item.size,
+        color: item.colors?.[0] || null,
+        size: item.sizes?.[0] || null,
+
+        // Save the exact product image used for this cart item
+        image: item.image || item.product.images?.[0] || null,
       })),
       paymentMethod: paymentMethod || "cash",
       paymentStatus: "pending",
@@ -135,7 +175,24 @@ export const createOrder = async (req, res, next) => {
         const io = req.app.get("io");
         const sellerIds = [...new Set(cart.items.map(i => i.product.seller.toString()))];
 
-        // Parallel notifications to all sellers + buyer
+        // Parallel notifications to all sellers + buyer + admin
+        (async () => {
+          try {
+            const io = req.app.get("io");
+            const admin = await User.findOne({ role: 'admin' }).select('_id');
+
+            await createNotifications({
+              io, title: "🔔 طلب جديد",
+              message: ` طلب جديد. رقم الطلب: ${order._id.toString().slice(-6)}`,
+              type: "ORDER_PLACED",
+              actor: req.user._id, userId: sellerId,
+              userId: admin._id.toString(),
+              data: { orderId: order._id }, link: `/orders/${order._id}`,
+            });
+
+          } catch (err) { console.error("Notification Error:", err); }
+        })();
+
         await Promise.all([
           ...sellerIds.map((sellerId) =>
             createNotifications({
@@ -288,8 +345,20 @@ export const updateDeliveryStatus = async (req, res, next) => {
 
     if (!order) throw new createError("الطلب غير موجود", 404);
 
+    const oldStatus = order.deliveryStatus;
     order.deliveryStatus = deliveryStatus;
     await order.save();
+
+    // Award loyalty points when order is delivered
+    if (oldStatus !== 'delivered' && deliveryStatus === 'delivered' && order.buyer) {
+      (async () => {
+        try {
+          await earnPointsFromOrder(order.buyer.toString(), order._id.toString(), order.total);
+        } catch (err) {
+          console.error('Error awarding loyalty points:', err);
+        }
+      })();
+    }
 
     (async () => {
       try {
@@ -388,7 +457,7 @@ export const getAdminOrders = async (req, res, next) => {
       .populate({ path: 'items.product', select: 'title titleEn images' })
       .populate({ path: 'items.seller', select: 'firstName lastName email phone wallet' })
       .sort(sortObj).skip(skip).limit(limit).lean();
-
+    console.log(orders, 'orders25')
     res.json(formatPaginationResponse(orders, total, req.pagination));
   } catch (err) { next(err); }
 };

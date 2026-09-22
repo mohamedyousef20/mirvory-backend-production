@@ -32,6 +32,7 @@ import { isAdmin, isSeller, protect } from '../middlewares/auth.js';
 import { paginate } from '../middlewares/pagination.js';
 import { sort } from '../middlewares/sort.js';
 import { buildFilter, commonFilters } from '../middlewares/search.js';
+import { uploadImages } from '../middlewares/upload.js';
 
 const router = express.Router();
 
@@ -41,11 +42,11 @@ router.get('/admin-products', protect, isAdmin, paginate(12), sort(), buildFilte
 router.patch('/approve', protect, isAdmin, approveProduct);
 router.patch('/reject', protect, isAdmin, rejectProduct);
 router.patch('/trust', protect, isAdmin, trustProduct);
+router.patch('/:id', protect, uploadImages, updateProduct);
 
 // مسارات البائع
 router.get('/seller/products', protect, isSeller, paginate(12), sort(), buildFilter(commonFilters.product), getSellerProducts);
 router.delete('/', protect, isSeller, deleteProduct);
-router.patch('/', protect, isSeller, updateProduct);
 
 // مسارات عامة
 // Get all products in category

@@ -11,11 +11,54 @@ const orderSchema = new mongoose.Schema({
   isGuest: { type: Boolean, default: false },
 
   items: [{
-    product: { type: mongoose.Schema.Types.ObjectId, ref: "Product", required: true },
-    seller: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-    quantity: Number, price: Number, color: String, size: String,
-    isPrepared: { type: Boolean, default: false },
+    product: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Product",
+      required: true
+    },
+
+    seller: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true
+    },
+
+    quantity: {
+      type: Number,
+      required: true
+    },
+
+    price: {
+      type: Number,
+      required: true
+    },
+
+    color: {
+      name: {
+        type: String,
+        default: null
+      },
+      value: {
+        type: String,
+        default: null
+      }
+    },
+
+    size: {
+      type: String
+    },
+
+    // Product image snapshot at the time of purchase
+    image: {
+      type: String
+    },
+
+    isPrepared: {
+      type: Boolean,
+      default: false
+    },
   }],
+
   deliveryInfo: {
     fullName: { type: String, required: true, trim: true },
     phone: { type: String, required: true, match: /^01[0125][0-9]{8}$/ },

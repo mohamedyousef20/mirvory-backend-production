@@ -26,10 +26,10 @@ const trackLimiter = rateLimit({
 });
 
 // POST /api/guest-orders — create guest order (no auth required)
-router.post('/', guestCheckoutLimiter, createGuestOrder);
+router.post('/', createGuestOrder);
 
 // GET /api/guest-orders/track/:token — track a guest order
-router.get('/track/:token', trackLimiter, trackGuestOrder);
+router.get('/track/:token', trackGuestOrder);
 
 // POST /api/guest-orders/link-account — link guest order to authenticated account
 router.post('/link-account', protect, linkGuestOrderToAccount);

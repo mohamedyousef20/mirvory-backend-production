@@ -25,7 +25,7 @@ router.post('/login', authLimiter, loginUserValid, login);
 router.post('/auth/login', authLimiter, loginUserValid, login);
 router.post('/auth/google', authLimiter, googleAuth);
 router.post('/auth/social-set-cookies', setSocialCookies);
-router.post('/refresh-token', refreshToken);
+// router.post('/refresh-token', refreshToken);
 router.post('/logout', logout);
 
 router.get('/test-auth', protect, (req, res) => {

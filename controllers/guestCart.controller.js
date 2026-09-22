@@ -4,6 +4,7 @@
 
 import mongoose from 'mongoose';
 import Product from '../models/product.model.js';
+import ShippingSettings from '../models/shippingSettings.model.js';
 import createError from '../utils/error.js';
 
 /**
@@ -84,7 +85,15 @@ export const validateGuestCart = async (req, res, next) => {
       };
     });
 
-    const shippingFee = subtotal >= 2000 ? 0 : 70;
+    // Get shipping settings (basic calculation - full calculation at checkout)
+    const shippingSettings = await ShippingSettings.getSettings();
+    let shippingFee = shippingSettings.shippingFee;
+
+    // Apply free shipping threshold
+    if (shippingSettings.freeShippingEnabled && subtotal >= shippingSettings.freeShippingMinimum) {
+      shippingFee = 0;
+    }
+
     const total = subtotal + shippingFee;
 
     return res.status(200).json({

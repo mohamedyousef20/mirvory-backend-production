@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import Order from '../models/order.model.js';
 import Product from '../models/product.model.js';
 import GuestOrder from '../models/guestOrder.model.js';
+import ShippingSettings from '../models/shippingSettings.model.js';
 import createError from '../utils/error.js';
 import { createNotifications } from '../utils/notification.js';
 
@@ -36,129 +37,330 @@ export const createGuestOrder = async (req, res, next) => {
       guestName,
       guestEmail,
       guestPhone,
-      items,            // [{ productId, quantity, size?, color? }]
+      items, // [{ productId, quantity, size?, color? }]
       deliveryMethod,
       paymentMethod,
-      deliveryInfo,     // { address?, pickupPoint? }
+      deliveryInfo, // { address?, pickupPoint? }
     } = req.body;
 
     // ── 1. Basic validation ──────────────────────────────────────────
-    if (!guestName?.trim()) throw new createError('الاسم مطلوب', 400);
-    if (!guestEmail?.trim()) throw new createError('البريد الإلكتروني مطلوب', 400);
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guestEmail)) throw new createError('البريد الإلكتروني غير صالح', 400);
-    if (!guestPhone?.trim()) throw new createError('رقم الهاتف مطلوب', 400);
-    if (!/^01[0125][0-9]{8}$/.test(guestPhone)) throw new createError('رقم الهاتف غير صالح (يجب أن يكون رقم مصري)', 400);
-    if (!Array.isArray(items) || items.length === 0) throw new createError('يجب اختيار منتج واحد على الأقل', 400);
-    if (items.length > 20) throw new createError('لا يمكن طلب أكثر من 20 منتجًا', 400);
-    if (deliveryMethod === 'home' && !deliveryInfo?.address?.trim()) throw new createError('عنوان التوصيل مطلوب', 400);
-    if (deliveryMethod === 'pickup' && !deliveryInfo?.pickupPoint) throw new createError('نقطة الاستلام مطلوبة', 400);
+    if (!guestName?.trim()) {
+      throw new createError("الاسم مطلوب", 400);
+    }
 
-    // ── 2. Rate limiting per IP (max 3 guest orders per hour) ────────
-    const clientIp = req.ip || req.headers['x-forwarded-for']?.split(',')[0] || '0.0.0.0';
+    if (!guestEmail?.trim()) {
+      throw new createError("البريد الإلكتروني مطلوب", 400);
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guestEmail)) {
+      throw new createError("البريد الإلكتروني غير صالح", 400);
+    }
+
+    if (!guestPhone?.trim()) {
+      throw new createError("رقم الهاتف مطلوب", 400);
+    }
+
+    if (!/^01[0125][0-9]{8}$/.test(guestPhone)) {
+      throw new createError(
+        "رقم الهاتف غير صالح (يجب أن يكون رقم مصري)",
+        400
+      );
+    }
+
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new createError("يجب اختيار منتج واحد على الأقل", 400);
+    }
+
+    if (items.length > 20) {
+      throw new createError("لا يمكن طلب أكثر من 20 منتجًا", 400);
+    }
+
+    if (
+      deliveryMethod === "home" &&
+      !deliveryInfo?.address?.trim()
+    ) {
+      throw new createError("عنوان التوصيل مطلوب", 400);
+    }
+
+    if (
+      deliveryMethod === "pickup" &&
+      !deliveryInfo?.pickupPoint
+    ) {
+      throw new createError("نقطة الاستلام مطلوبة", 400);
+    }
+
+    // ── 2. Rate limiting per IP ─────────────────────────────────────
+    const clientIp =
+      req.ip ||
+      req.headers["x-forwarded-for"]?.split(",")[0] ||
+      "0.0.0.0";
+
     const ipHash = hashIp(clientIp);
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-    const recentCount = await GuestOrder.countDocuments({ ipHash, createdAt: { $gte: oneHourAgo } });
-    if (recentCount >= 3) throw new createError('تجاوزت الحد المسموح به من الطلبات. حاول مرة أخرى بعد ساعة.', 429);
 
-    // ── 3. Duplicate order guard (same email + same items within 10 min) ──
-    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000);
+    const oneHourAgo = new Date(
+      Date.now() - 60 * 60 * 1000
+    );
+
+    const recentCount = await GuestOrder.countDocuments({
+      ipHash,
+      createdAt: { $gte: oneHourAgo },
+    });
+
+    // if (recentCount >= 3) {
+    //   throw new createError(
+    //     "تجاوزت الحد المسموح به من الطلبات. حاول مرة أخرى بعد ساعة.",
+    //     429
+    //   );
+    // }
+
+    // ── 3. Duplicate order guard ────────────────────────────────────
+    const tenMinAgo = new Date(
+      Date.now() - 10 * 60 * 1000
+    );
+
     const recentDuplicate = await GuestOrder.findOne({
       guestEmail: guestEmail.toLowerCase().trim(),
       createdAt: { $gte: tenMinAgo },
-    }).lean().select('_id');
-    if (recentDuplicate) throw new createError('لديك طلب مسجل بالفعل خلال آخر 10 دقائق. يرجى الانتظار قبل إنشاء طلب جديد.', 429);
+    })
+      .lean()
+      .select("_id");
 
-    // ── 4. Validate & reserve product stock via bulkWrite ─────────────
-    const productIds = items.map((i) => {
-      if (!mongoose.Types.ObjectId.isValid(i.productId)) throw new createError(`معرّف المنتج غير صالح: ${i.productId}`, 400);
-      if (!Number.isInteger(i.quantity) || i.quantity < 1) throw new createError('الكمية يجب أن تكون رقمًا صحيحًا موجبًا', 400);
-      return new mongoose.Types.ObjectId(i.productId);
+    if (recentDuplicate) {
+      throw new createError(
+        "لديك طلب مسجل بالفعل خلال آخر 10 دقائق. يرجى الانتظار قبل إنشاء طلب جديد.",
+        429
+      );
+    }
+
+    // ── 4. Validate product IDs ─────────────────────────────────────
+    const productIds = items.map((item) => {
+      if (!mongoose.Types.ObjectId.isValid(item.productId)) {
+        throw new createError(
+          `معرّف المنتج غير صالح: ${item.productId}`,
+          400
+        );
+      }
+
+      if (
+        !Number.isInteger(item.quantity) ||
+        item.quantity < 1
+      ) {
+        throw new createError(
+          "الكمية يجب أن تكون رقمًا صحيحًا موجبًا",
+          400
+        );
+      }
+
+      return new mongoose.Types.ObjectId(item.productId);
     });
 
+    // ── 5. Fetch products including colors + images ─────────────────
     const products = await Product.find({
       _id: { $in: productIds },
-      status: 'available',
+      status: "available",
       isApproved: true,
-    }).select('_id price discountedPrice seller quantity').lean();
+    })
+      .select(
+        "_id price discountedPrice seller quantity images colors"
+      )
+      .lean();
 
-    if (products.length !== items.length) throw new createError('بعض المنتجات غير متوفرة أو تم حذفها', 404);
-
-    const productMap = Object.fromEntries(products.map((p) => [p._id.toString(), p]));
-
-    // Verify stock availability
-    for (const item of items) {
-      const product = productMap[item.productId.toString()];
-      if (!product) throw new createError(`المنتج غير موجود: ${item.productId}`, 404);
-      if (product.quantity < item.quantity) throw new createError(`الكمية المطلوبة غير متوفرة في المخزون`, 400);
+    if (products.length !== items.length) {
+      throw new createError(
+        "بعض المنتجات غير متوفرة أو تم حذفها",
+        404
+      );
     }
 
-    // Bulk reserve stock
+    const productMap = Object.fromEntries(
+      products.map((product) => [
+        product._id.toString(),
+        product,
+      ])
+    );
+
+    // ── 6. Verify stock availability ────────────────────────────────
+    for (const item of items) {
+      const product =
+        productMap[item.productId.toString()];
+
+      if (!product) {
+        throw new createError(
+          `المنتج غير موجود: ${item.productId}`,
+          404
+        );
+      }
+
+      if (product.quantity < item.quantity) {
+        throw new createError(
+          "الكمية المطلوبة غير متوفرة في المخزون",
+          400
+        );
+      }
+    }
+
+    // ── 7. Reserve stock ────────────────────────────────────────────
     const bulkOps = items.map((item) => ({
       updateOne: {
-        filter: { _id: new mongoose.Types.ObjectId(item.productId), quantity: { $gte: item.quantity } },
-        update: { $inc: { quantity: -item.quantity, sold: item.quantity } },
+        filter: {
+          _id: new mongoose.Types.ObjectId(item.productId),
+          quantity: { $gte: item.quantity },
+        },
+        update: {
+          $inc: {
+            quantity: -item.quantity,
+            sold: item.quantity,
+          },
+        },
       },
     }));
+
     const bulkResult = await Product.bulkWrite(bulkOps);
+
     if (bulkResult.modifiedCount !== items.length) {
-      throw new createError('بعض المنتجات نفذت من المخزون أثناء تأكيد الطلب', 400);
+      throw new createError(
+        "بعض المنتجات نفذت من المخزون أثناء تأكيد الطلب",
+        400
+      );
     }
 
-    // ── 5. Calculate totals ──────────────────────────────────────────
+    // ── 8. Calculate totals + build order items ──────────────────────
     let subtotal = 0;
+
     const orderItems = items.map((item) => {
-      const product = productMap[item.productId.toString()];
+      const product =
+        productMap[item.productId.toString()];
+
       const price = getEffectivePrice(product);
+
       subtotal += price * item.quantity;
+
+      // Find the exact selected color
+      const selectedColor = item.color
+        ? product.colors?.find(
+          (color) => color.value === item.color
+        )
+        : null;
+
+      // Get the image belonging to the selected color
+      const selectedColorImage =
+        selectedColor?.image ||
+        product.images?.[0] ||
+        null;
+
       return {
         product: product._id,
         seller: product.seller,
         quantity: item.quantity,
         price,
+
         size: item.size || undefined,
-        color: item.color || undefined,
+
+        color: selectedColor
+          ? {
+            name: selectedColor.name,
+            value: selectedColor.value,
+          }
+          : item.color
+            ? {
+              name: item.color,
+              value: item.color,
+            }
+            : undefined,
+
+        // IMPORTANT:
+        // Save the selected color image in the order snapshot
+        image: selectedColorImage,
       };
     });
 
-    const shippingFee = (subtotal >= 2000 || deliveryMethod === 'pickup') ? 0 : 70;
-    const total = Math.max(0, subtotal + shippingFee);
+    // Get shipping settings and calculate shipping fee
+    const shippingSettings = await ShippingSettings.getSettings();
+    let shippingFee = shippingSettings.shippingFee;
 
-    // ── 6. Create a placeholder buyer (guest sentinel) ───────────────
-    // We use a special system ObjectId so the Order.buyer field is satisfied.
-    // For proper multi-vendor, each item already has a `seller` field.
-    // We need a buyer ObjectId — use a fixed "guest" ObjectId (seeded once).
-    let guestSentinelId;
-    if (process.env.GUEST_SENTINEL_USER_ID && mongoose.Types.ObjectId.isValid(process.env.GUEST_SENTINEL_USER_ID)) {
-      guestSentinelId = new mongoose.Types.ObjectId(process.env.GUEST_SENTINEL_USER_ID);
-    } else {
-      // Use a deterministic ObjectId from the string 'guest_sentinel'
-      guestSentinelId = new mongoose.Types.ObjectId('000000000000000000000001');
+    // Free shipping based on minimum order
+    if (shippingSettings.freeShippingEnabled && subtotal >= shippingSettings.freeShippingMinimum) {
+      shippingFee = 0;
     }
 
-    const secretCode = await generateSecretCode('G');
+    // Free pickup shipping
+    if (shippingSettings.freePickupShipping && deliveryMethod === 'pickup') {
+      shippingFee = 0;
+    }
 
-    // ── 7. Create Order ─────────────────────────────────────────────
+    // Free metro shipping (if address is provided)
+    if (shippingSettings.freeMetroShipping && deliveryInfo.address) {
+      const isMetro = shippingSettings.metroAreas?.some(area => 
+        deliveryInfo.address.toLowerCase().includes(area.toLowerCase())
+      );
+      if (isMetro) {
+        shippingFee = 0;
+      }
+    }
+
+    const total = Math.max(
+      0,
+      subtotal + shippingFee
+    );
+
+    // ── 9. Create guest sentinel buyer ───────────────────────────────
+    let guestSentinelId;
+
+    if (
+      process.env.GUEST_SENTINEL_USER_ID &&
+      mongoose.Types.ObjectId.isValid(
+        process.env.GUEST_SENTINEL_USER_ID
+      )
+    ) {
+      guestSentinelId = new mongoose.Types.ObjectId(
+        process.env.GUEST_SENTINEL_USER_ID
+      );
+    } else {
+      guestSentinelId = new mongoose.Types.ObjectId(
+        "000000000000000000000001"
+      );
+    }
+
+    const secretCode = await generateSecretCode("G");
+
+    // ── 10. Create Order ─────────────────────────────────────────────
     const order = await Order.create({
       buyer: guestSentinelId,
+
+      isGuest: true,
+
       items: orderItems,
-      paymentMethod,
-      paymentStatus: 'pending',
-      deliveryStatus: 'pending',
-      deliveryMethod,
+
+      paymentMethod: paymentMethod || "cash",
+      paymentStatus: "pending",
+      deliveryStatus: "pending",
+
+      deliveryMethod: deliveryMethod || "home",
+
       deliveryInfo: {
         fullName: guestName.trim(),
         phone: guestPhone.trim(),
-        address: deliveryMethod === 'home' ? deliveryInfo?.address?.trim() : undefined,
-        pickupPoint: deliveryMethod === 'pickup' ? deliveryInfo?.pickupPoint : undefined,
+
+        address:
+          deliveryMethod === "home"
+            ? deliveryInfo?.address?.trim()
+            : undefined,
+
+        pickupPoint:
+          deliveryMethod === "pickup"
+            ? deliveryInfo?.pickupPoint
+            : undefined,
       },
+
       subtotal,
       discount: 0,
       shippingFee,
       total,
+
       secretCode,
     });
 
-    // ── 8. Create GuestOrder record ──────────────────────────────────
+    // ── 11. Create GuestOrder record ─────────────────────────────────
     const guestRecord = await GuestOrder.create({
       guestEmail: guestEmail.toLowerCase().trim(),
       guestPhone: guestPhone.trim(),
@@ -167,34 +369,52 @@ export const createGuestOrder = async (req, res, next) => {
       ipHash,
     });
 
-    // ── 9. Notify sellers (fire-and-forget) ─────────────────────────
+    // ── 12. Notify sellers ──────────────────────────────────────────
     setImmediate(async () => {
       try {
-        const io = req.app.get('io');
-        const sellerIds = [...new Set(orderItems.map((i) => i.seller.toString()))];
-        const notifPromises = sellerIds.map((sellerId) =>
-          createNotifications({
-            io,
-            title: '🔔 طلب ضيف جديد',
-            message: `طلب جديد من ضيف: ${guestName}. رقم الطلب: ${order._id.toString().slice(-6)}`,
-            type: 'ORDER_PLACED',
-            actor: null,
-            userId: sellerId,
-            data: { orderId: order._id },
-            link: `/vendor/orders/${order._id}`,
-          })
+        const io = req.app.get("io");
+
+        const sellerIds = [
+          ...new Set(
+            orderItems.map((item) =>
+              item.seller.toString()
+            )
+          ),
+        ];
+
+        const notifPromises = sellerIds.map(
+          (sellerId) =>
+            createNotifications({
+              io,
+              title: "🔔 طلب ضيف جديد",
+              message: `طلب جديد من ضيف: ${guestName}. رقم الطلب: ${order._id
+                .toString()
+                .slice(-6)}`,
+              type: "ORDER_PLACED",
+              actor: null,
+              userId: sellerId,
+              data: {
+                orderId: order._id,
+              },
+              link: `/vendor/orders/${order._id}`,
+            })
         );
+
         await Promise.all(notifPromises);
       } catch (err) {
-        // Non-fatal — just log
-        if (process.env.NODE_ENV !== 'production') console.error('Guest order notification error:', err);
+        if (process.env.NODE_ENV !== "production") {
+          console.error(
+            "Guest order notification error:",
+            err
+          );
+        }
       }
     });
 
-    // ── 10. Response ─────────────────────────────────────────────────
+    // ── 13. Response ─────────────────────────────────────────────────
     return res.status(201).json({
       success: true,
-      message: 'تم إنشاء طلبك بنجاح',
+      message: "تم إنشاء طلبك بنجاح",
       trackingToken: guestRecord.trackingToken,
       orderId: order._id,
       orderNumber: order.orderNumber,
@@ -204,7 +424,6 @@ export const createGuestOrder = async (req, res, next) => {
     next(err);
   }
 };
-
 // ─────────────────────────────────────────────
 // GET /api/guest-orders/track/:token
 // ─────────────────────────────────────────────

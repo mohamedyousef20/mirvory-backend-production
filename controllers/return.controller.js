@@ -183,16 +183,19 @@ export const updateReturnStatus = async (req, res, next) => {
       throw new createError("صلاحيات غير كافية", 403);
     }
 
-    const { status, returnId } = req.body;
+    const { status, returnId, rejectionReason } = req.body;
     if (!isValidObjectId(returnId)) throw new createError("معرف الطلب غير صالح", 400);
 
-    const validStatuses = ['pending', 'approved', 'rejected', 'processed'];
+    const validStatuses = ['pending', 'approved', 'rejected', 'processed', 'processing'];
     if (!validStatuses.includes(status)) throw new createError('حالة الإرجاع غير صحيحة', 400);
 
     const returnRequest = await ReturnRequest.findById(returnId);
     if (!returnRequest) throw new createError('طلب الإرجاع غير موجود', 404);
 
     returnRequest.status = status;
+    if (status === 'rejected' && rejectionReason) {
+      returnRequest.rejectionReason = rejectionReason;
+    }
     await returnRequest.save();
 
     (async () => {
@@ -202,12 +205,14 @@ export const updateReturnStatus = async (req, res, next) => {
           approved: '✅ تم الموافقة على طلب الإرجاع الخاص بك، وسيتم التنسيق معك قريباً.',
           rejected: '❌ تم رفض طلب الإرجاع الخاص بك.',
           processed: '💸 تم استرجاع المبلغ بنجاح وإغلاق الطلب.',
+          processing: '🔄 جاري معالجة طلب الإرجاع الخاص بك.',
         };
 
         const sellerMessages = {
           approved: '🔔 تمت الموافقة على طلب إرجاع منتج من طلباتك.',
           rejected: '🚫 تم رفض طلب الإرجاع الخاص بمنتج من متجرك.',
           processed: '💸 تم إكمال عملية الإرجاع لهذا الطلب.',
+          processing: '🔄 جاري معالجة طلب إرجاع منتج من متجرك.',
         };
 
         await createNotifications({
@@ -256,9 +261,9 @@ export const getReturnRequestById = async (req, res, next) => {
     if (!isValidObjectId(id)) throw new createError("المعرف غير صالح", 400);
 
     const returnRequest = await ReturnRequest.findById(id)
-      .populate('order', 'orderNumber createdAt')
-      .populate('product')
-      .populate('user', 'firstName lastName email')
+      .populate('order', 'orderNumber createdAt totalPrice')
+      .populate('product', 'title price images')
+      .populate('user', 'firstName lastName email phone')
       .populate('seller', 'firstName lastName email');
     if (!returnRequest) throw new createError('طلب الإرجاع غير موجود', 404);
     const userId = req.user?._id.toString();

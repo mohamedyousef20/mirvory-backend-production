@@ -22,7 +22,12 @@ const cartItemSchema = new mongoose.Schema({
   colors: [{
     type: String,
     required: true
-  }]
+  }],
+
+    image: {
+    type: String,
+    default: null
+  }
 });
 
 const cartSchema = new mongoose.Schema({
@@ -43,6 +48,7 @@ const cartSchema = new mongoose.Schema({
     type: Number,
     default: 0
   }
+  
 }, {
   timestamps: true
 });

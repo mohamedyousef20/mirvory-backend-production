@@ -3,6 +3,7 @@ import User from '../models/user.model.js';
 
 // 1. حماية المسار والتأكد من وجود التوكن
 export const protect = async (req, res, next) => {
+  console.log('protect called');
   try {
     let token;
     if (req.cookies?.accessToken) {
@@ -65,8 +66,9 @@ export const isSuperAdmin = (req, res, next) => {
 };
 // 2. صلاحيات الأدمن (Super Admin و Admin)
 export const isAdmin = (req, res, next) => {
+  console.log('isAdmin')
   const authorizedRoles = ['admin', 'super_admin'];
-
+console.log(req.user.role,';;;')
   if (req.user && authorizedRoles.includes(req.user.role)) {
     next();
   } else {

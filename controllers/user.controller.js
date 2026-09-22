@@ -220,9 +220,9 @@ export const login = async (req, res, next) => {
 
     const refreshToken = jwt.sign(
       { id: user._id, version: Date.now() },
-      process.env.REFRESH_SECRET,
+      process.env.JWT_SECRET,
       {
-        expiresIn: process.env.JWT_REFRESH_EXPIRE || '10d',
+        expiresIn: process.env.JWT_REFRESH_EXPIRE || '30d',
       }
     );
 
