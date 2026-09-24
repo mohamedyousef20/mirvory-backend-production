@@ -7,6 +7,7 @@ import User from '../models/user.model.js';
 import createError from '../utils/error.js';
 import { createNotifications } from '../utils/notification.js';
 import { formatPaginationResponse } from '../middlewares/pagination.js';
+import { withStableTiebreaker } from '../utils/pagination.js';
 
 // ==========================================
 // 🛠 HELPER FUNCTIONS
@@ -32,7 +33,7 @@ const parseDurationToMs = (durationStr) => {
 export const searchUsers = async (req, res, next) => {
   try {
     const { page, limit, skip } = req.pagination;
-    const sortObj = req.sort || { createdAt: -1 };
+    const sortObj = withStableTiebreaker(req.sort);
     const filterObj = req.filter || {};
     const searchFilter = req.searchFilter || {};
 
@@ -56,7 +57,7 @@ export const searchUsers = async (req, res, next) => {
 export const searchUsersForAdmin = async (req, res, next) => {
   try {
     const { page, limit, skip } = req.pagination;
-    const sortObj = req.sort || { createdAt: -1 };
+    const sortObj = withStableTiebreaker(req.sort);
     const filterObj = req.filter || {};
     const searchFilter = req.searchFilter || {};
 
@@ -80,7 +81,7 @@ export const searchUsersForAdmin = async (req, res, next) => {
 export const getSellerForAdmin = async (req, res, next) => {
   try {
     const { page, limit, skip } = req.pagination;
-    const sortObj = req.sort || { createdAt: -1 };
+    const sortObj = withStableTiebreaker(req.sort);
     const filterObj = req.filter || {};
     const searchFilter = req.searchFilter || {};
 
@@ -101,7 +102,7 @@ export const getSellerForAdmin = async (req, res, next) => {
 export const getUsersForAdmin = async (req, res, next) => {
   try {
     const { page, limit, skip } = req.pagination;
-    const sortObj = req.sort || { createdAt: -1 };
+    const sortObj = withStableTiebreaker(req.sort);
     const filterObj = req.filter || {};
     const searchFilter = req.searchFilter || {};
 

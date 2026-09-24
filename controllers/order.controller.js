@@ -7,7 +7,8 @@ import mongoose from 'mongoose';
 import createError from '../utils/error.js';
 import { createNotifications } from '../utils/notification.js';
 import { formatPaginationResponse } from '../middlewares/pagination.js';
-import { earnPointsFromOrder } from './loyalty.controller.js';
+import { withStableTiebreaker } from '../utils/pagination.js';
+import { earnPointsFromOrder, revokePointsFromOrder } from './loyalty.controller.js';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 const getEffectivePrice = (product) => {
@@ -360,6 +361,17 @@ export const updateDeliveryStatus = async (req, res, next) => {
       })();
     }
 
+    // Take the points back when a delivered order is cancelled/returned
+    if (oldStatus === 'delivered' && deliveryStatus !== 'delivered' && order.buyer) {
+      (async () => {
+        try {
+          await revokePointsFromOrder(order.buyer.toString(), order._id.toString(), `order_${deliveryStatus}`);
+        } catch (err) {
+          console.error('Error revoking loyalty points:', err);
+        }
+      })();
+    }
+
     (async () => {
       try {
         const io = req.app.get("io");
@@ -445,7 +457,7 @@ export const confirmPreparation = async (req, res, next) => {
 export const getAdminOrders = async (req, res, next) => {
   try {
     const { page, limit, skip } = req.pagination;
-    const sortObj = req.sort || { createdAt: -1 };
+    const sortObj = withStableTiebreaker(req.sort);
     const filterObj = req.filter || {};
     const searchFilter = req.searchFilter || {};
 
@@ -466,7 +478,7 @@ export const getUserOrders = async (req, res, next) => {
   try {
     const { page, limit, skip } = req.pagination;
 
-    const sortObj = req.sort || { createdAt: -1 };
+    const sortObj = withStableTiebreaker(req.sort);
     const filterObj = req.filter || {};
     const searchFilter = req.searchFilter || {};
 
@@ -502,7 +514,7 @@ export const getUserOrders = async (req, res, next) => {
 export const getSellerOrders = async (req, res, next) => {
   try {
     const { page, limit, skip } = req.pagination;
-    const sortObj = req.sort || { createdAt: -1 };
+    const sortObj = withStableTiebreaker(req.sort);
     const filterObj = req.filter || {};
     const searchFilter = req.searchFilter || {};
 

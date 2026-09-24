@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import { createNotifications } from '../utils/notification.js';
 import createError from '../utils/error.js';
 import { formatPaginationResponse } from '../middlewares/pagination.js';
+import { withStableTiebreaker } from '../utils/pagination.js';
 import { uploadImage, removeImage } from '../services/imageUploadService.js';
 import cloudinary from '../config/cloudinary.js';
 
@@ -440,7 +441,7 @@ export const trustProduct = async (req, res, next) => {
 export const getProducts = async (req, res, next) => {
   try {
     const { page, limit, skip } = req.pagination;
-    const sortObj = req.sort || { createdAt: -1 };
+    const sortObj = withStableTiebreaker(req.sort);
     const filterObj = req.filter || {};
 
     const filter = {
@@ -491,7 +492,7 @@ export const getProductsForAdmin = async (req, res, next) => {
   try {
     if (req.user.role !== 'admin' && req.user.role !== 'super_admin') throw new createError("مرفوض", 403);
     const { page, limit, skip } = req.pagination;
-    const sortObj = req.sort || { createdAt: -1 };
+    const sortObj = withStableTiebreaker(req.sort);
     const filterObj = req.filter || {};
 
     const filter = { ...filterObj };
@@ -511,7 +512,7 @@ export const getProductsForAdmin = async (req, res, next) => {
 export const getSellerProducts = async (req, res, next) => {
   try {
     const { page, limit, skip } = req.pagination;
-    const sortObj = req.sort || { createdAt: -1 };
+    const sortObj = withStableTiebreaker(req.sort);
     const filterObj = req.filter || {};
 
     const filter = { seller: req.user._id, status: { $ne: 'deleted' }, ...filterObj };
@@ -580,7 +581,7 @@ export const getProductsByCategory = async (req, res, next) => {
     }
 
     const { page, limit, skip } = req.pagination;
-    const sortObj = req.sort || { createdAt: -1 };
+    const sortObj = withStableTiebreaker(req.sort);
     const filterObj = req.filter || {};
 
     const filter = {

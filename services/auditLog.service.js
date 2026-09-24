@@ -1,4 +1,9 @@
 import AuditLog from '../models/auditLog.model.js';
+import {
+  buildPaginationMeta,
+  parsePageParams,
+  withStableTiebreaker,
+} from '../utils/pagination.js';
 
 class AuditLogService {
   // Log admin action
@@ -64,26 +69,23 @@ class AuditLogService {
       if (endDate) query.createdAt.$lte = new Date(endDate);
     }
 
-    const skip = (page - 1) * limit;
+    const { page: safePage, limit: safeLimit, skip } = parsePageParams({ page, limit }, 50);
 
     const [logs, total] = await Promise.all([
       AuditLog.find(query)
         .populate('adminId', 'firstName lastName email role')
         .populate('targetUserId', 'firstName lastName email role')
-        .sort({ createdAt: -1 })
+        .sort(withStableTiebreaker({ createdAt: -1 }))
         .skip(skip)
-        .limit(limit),
+        .limit(safeLimit),
       AuditLog.countDocuments(query)
     ]);
 
+    const pagination = buildPaginationMeta({ page: safePage, limit: safeLimit }, total);
+
     return {
       logs,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit)
-      }
+      pagination: { ...pagination, pages: pagination.totalPages }
     };
   }
 

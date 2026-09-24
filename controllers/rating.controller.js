@@ -3,6 +3,7 @@ import Product from '../models/product.model.js';
 import User from '../models/user.model.js';
 import createError from '../utils/error.js';
 import { formatPaginationResponse } from '../middlewares/pagination.js';
+import { withStableTiebreaker } from '../utils/pagination.js';
 
 // Create a new rating
 export const createRating = async (req, res, next) => {
@@ -64,7 +65,7 @@ export const getProductRatings = async (req, res, next) => {
   try {
     const { productId } = req.params;
     const { page, limit, skip } = req.pagination;
-    const sortObj = req.sort || { createdAt: -1 };
+    const sortObj = withStableTiebreaker(req.sort);
 
     const [ratings, total] = await Promise.all([
       Rating.find({ product: productId })

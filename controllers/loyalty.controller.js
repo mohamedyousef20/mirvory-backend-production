@@ -1,6 +1,21 @@
+import mongoose from 'mongoose';
 import User from '../models/user.model.js';
 import LoyaltyTransaction from '../models/loyaltyTransaction.model.js';
 import createError from '../utils/error.js';
+import {
+  buildPaginationMeta,
+  parsePageParams,
+  withStableTiebreaker,
+} from '../utils/pagination.js';
+
+const EMPTY_LOYALTY = {
+  points: 0,
+  tier: 'bronze',
+  totalEarned: 0,
+  totalRedeemed: 0,
+};
+
+const normalizeLoyalty = (loyalty) => ({ ...EMPTY_LOYALTY, ...(loyalty ? loyalty.toObject?.() ?? loyalty : {}) });
 
 // Loyalty tier thresholds (points required)
 const TIER_THRESHOLDS = {
@@ -30,12 +45,14 @@ export const getUserLoyalty = async (req, res, next) => {
       throw createError('User not found', 404);
     }
 
+    const loyalty = normalizeLoyalty(user.loyalty);
+
     res.status(200).json({
       success: true,
-      loyalty: user.loyalty,
-      tier: user.loyalty.tier,
-      nextTier: getNextTier(user.loyalty.tier),
-      pointsToNextTier: getPointsToNextTier(user.loyalty.tier, user.loyalty.totalEarned)
+      loyalty,
+      tier: loyalty.tier,
+      nextTier: getNextTier(loyalty.tier),
+      pointsToNextTier: getPointsToNextTier(loyalty.tier, loyalty.totalEarned)
     });
   } catch (error) {
     next(error);
@@ -45,28 +62,27 @@ export const getUserLoyalty = async (req, res, next) => {
 // Get user loyalty transaction history
 export const getUserLoyaltyTransactions = async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, type } = req.query;
+    const { type } = req.query;
+    const { page, limit, skip } = parsePageParams(req.query, 20);
 
     const filter = { user: req.user._id };
     if (type) {
       filter.type = type;
     }
 
-    const transactions = await LoyaltyTransaction.find(filter)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
-
-    const total = await LoyaltyTransaction.countDocuments(filter);
+    const [transactions, total] = await Promise.all([
+      LoyaltyTransaction.find(filter)
+        .sort(withStableTiebreaker({ createdAt: -1 }))
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      LoyaltyTransaction.countDocuments(filter),
+    ]);
 
     res.status(200).json({
       success: true,
       transactions,
-      pagination: {
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(total / limit),
-        total
-      }
+      pagination: buildPaginationMeta({ page, limit }, total),
     });
   } catch (error) {
     next(error);
@@ -76,35 +92,57 @@ export const getUserLoyaltyTransactions = async (req, res, next) => {
 // Earn points from order completion (internal function, can be called from order controller)
 export const earnPointsFromOrder = async (userId, orderId, orderAmount) => {
   try {
-    const user = await User.findById(userId);
-    if (!user) return;
+    const pointsToEarn = Math.floor(Number(orderAmount) * POINTS_PER_EGP);
+    if (!Number.isFinite(pointsToEarn) || pointsToEarn <= 0) return;
 
-    const pointsToEarn = Math.floor(orderAmount * POINTS_PER_EGP);
-    if (pointsToEarn <= 0) return;
-
-    const oldTier = user.loyalty.tier;
-    const newTotalEarned = user.loyalty.totalEarned + pointsToEarn;
-    const newTier = calculateTier(newTotalEarned);
-
-    user.loyalty.points += pointsToEarn;
-    user.loyalty.totalEarned = newTotalEarned;
-    user.loyalty.tier = newTier;
-
-    await user.save();
-
-    // Create transaction record
-    await LoyaltyTransaction.create({
+    // An order may reach "delivered" more than once (status toggled back and
+    // forth, retried webhook, …) — points must only ever be granted once.
+    const alreadyAwarded = await LoyaltyTransaction.exists({
       user: userId,
-      type: 'earned',
-      points: pointsToEarn,
       source: 'order_completion',
       referenceId: orderId,
-      referenceModel: 'Order',
-      description: `Points earned from order #${orderId}`,
-      balanceAfter: user.loyalty.points,
-      tierBefore: oldTier,
-      tierAfter: newTier !== oldTier ? newTier : null
     });
+    if (alreadyAwarded) return;
+
+    const before = await User.findById(userId).select('loyalty').lean();
+    if (!before) return;
+
+    const oldLoyalty = normalizeLoyalty(before.loyalty);
+    const oldTier = oldLoyalty.tier;
+    const newTier = calculateTier(oldLoyalty.totalEarned + pointsToEarn);
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      {
+        $inc: { 'loyalty.points': pointsToEarn, 'loyalty.totalEarned': pointsToEarn },
+        $set: { 'loyalty.tier': newTier },
+      },
+      { new: true, select: 'loyalty' }
+    ).lean();
+
+    const balanceAfter = normalizeLoyalty(user?.loyalty).points;
+
+    try {
+      await LoyaltyTransaction.create({
+        user: userId,
+        type: 'earned',
+        points: pointsToEarn,
+        source: 'order_completion',
+        referenceId: orderId,
+        referenceModel: 'Order',
+        description: `Points earned from order #${orderId}`,
+        balanceAfter,
+        tierBefore: oldTier,
+        tierAfter: newTier !== oldTier ? newTier : null
+      });
+    } catch (logError) {
+      // Roll the balance back so the ledger and the balance cannot diverge.
+      await User.findByIdAndUpdate(userId, {
+        $inc: { 'loyalty.points': -pointsToEarn, 'loyalty.totalEarned': -pointsToEarn },
+        $set: { 'loyalty.tier': oldTier },
+      });
+      throw logError;
+    }
 
     return { pointsEarned: pointsToEarn, tierUpgraded: newTier !== oldTier, newTier };
   } catch (error) {
@@ -112,31 +150,100 @@ export const earnPointsFromOrder = async (userId, orderId, orderAmount) => {
   }
 };
 
+/**
+ * Reverses the points granted for an order (cancellation / refund).
+ */
+export const revokePointsFromOrder = async (userId, orderId, reason = 'order_reverted') => {
+  try {
+    const earned = await LoyaltyTransaction.findOne({
+      user: userId,
+      source: 'order_completion',
+      referenceId: orderId,
+    }).lean();
+    if (!earned) return;
+
+    const alreadyReverted = await LoyaltyTransaction.exists({
+      user: userId,
+      source: 'manual_adjustment',
+      referenceId: orderId,
+      type: 'adjusted',
+    });
+    if (alreadyReverted) return;
+
+    const before = await User.findById(userId).select('loyalty').lean();
+    if (!before) return;
+
+    const oldLoyalty = normalizeLoyalty(before.loyalty);
+    const oldTier = oldLoyalty.tier;
+    // Never push a balance negative: only take back what is still available.
+    const pointsToRevoke = Math.min(earned.points, oldLoyalty.points);
+    const newTotalEarned = Math.max(0, oldLoyalty.totalEarned - earned.points);
+    const newTier = calculateTier(newTotalEarned);
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      {
+        $inc: { 'loyalty.points': -pointsToRevoke, 'loyalty.totalEarned': -(oldLoyalty.totalEarned - newTotalEarned) },
+        $set: { 'loyalty.tier': newTier },
+      },
+      { new: true, select: 'loyalty' }
+    ).lean();
+
+    await LoyaltyTransaction.create({
+      user: userId,
+      type: 'adjusted',
+      points: -pointsToRevoke,
+      source: 'manual_adjustment',
+      referenceId: orderId,
+      referenceModel: 'Order',
+      description: `Points reverted for order #${orderId} (${reason})`,
+      balanceAfter: normalizeLoyalty(user?.loyalty).points,
+      tierBefore: oldTier,
+      tierAfter: newTier !== oldTier ? newTier : null,
+    });
+  } catch (error) {
+    console.error('Error revoking points:', error);
+  }
+};
+
 // Redeem points (user)
 export const redeemPoints = async (req, res, next) => {
   try {
-    const { points, orderId } = req.body;
+    const points = Number(req.body?.points);
+    const { orderId } = req.body || {};
 
-    if (!points || points <= 0) {
+    if (!Number.isInteger(points) || points <= 0) {
       throw createError('Invalid points amount', 400);
     }
 
-    const user = await User.findById(req.user._id);
-    if (!user) {
+    if (orderId && !mongoose.isValidObjectId(orderId)) {
+      throw createError('Invalid order id', 400);
+    }
+
+    const before = await User.findById(req.user._id).select('loyalty').lean();
+    if (!before) {
       throw createError('User not found', 404);
     }
 
-    if (user.loyalty.points < points) {
+    const oldTier = normalizeLoyalty(before.loyalty).tier;
+
+    // Conditional update: two concurrent redemptions cannot both pass the
+    // balance check, so the balance can never go negative.
+    const user = await User.findOneAndUpdate(
+      { _id: req.user._id, 'loyalty.points': { $gte: points } },
+      { $inc: { 'loyalty.points': -points, 'loyalty.totalRedeemed': points } },
+      { new: true, select: 'loyalty' }
+    ).lean();
+
+    if (!user) {
       throw createError('Insufficient points balance', 400);
     }
 
-    const oldTier = user.loyalty.tier;
-    user.loyalty.points -= points;
-    user.loyalty.totalRedeemed += points;
-    const newTier = calculateTier(user.loyalty.totalEarned);
-    user.loyalty.tier = newTier;
-
-    await user.save();
+    const loyalty = normalizeLoyalty(user.loyalty);
+    const newTier = calculateTier(loyalty.totalEarned);
+    if (newTier !== oldTier) {
+      await User.findByIdAndUpdate(req.user._id, { $set: { 'loyalty.tier': newTier } });
+    }
 
     // Create transaction record
     await LoyaltyTransaction.create({
@@ -147,7 +254,7 @@ export const redeemPoints = async (req, res, next) => {
       referenceId: orderId || null,
       referenceModel: 'Order',
       description: `Points redeemed for discount`,
-      balanceAfter: user.loyalty.points,
+      balanceAfter: loyalty.points,
       tierBefore: oldTier,
       tierAfter: newTier !== oldTier ? newTier : null
     });
@@ -156,8 +263,8 @@ export const redeemPoints = async (req, res, next) => {
       success: true,
       message: 'Points redeemed successfully',
       pointsRedeemed: points,
-      remainingPoints: user.loyalty.points,
-      tier: user.loyalty.tier
+      remainingPoints: loyalty.points,
+      tier: newTier
     });
   } catch (error) {
     next(error);
@@ -167,39 +274,45 @@ export const redeemPoints = async (req, res, next) => {
 // Manual points adjustment (admin only)
 export const adjustPoints = async (req, res, next) => {
   try {
-    const { userId, points, notes } = req.body;
+    const { userId, notes } = req.body || {};
+    const points = Number(req.body?.points);
 
-    if (!userId) {
+    if (!userId || !mongoose.isValidObjectId(userId)) {
       throw createError('User ID is required', 400);
     }
 
-    if (!points || points === 0) {
+    if (!Number.isInteger(points) || points === 0) {
       throw createError('Points amount is required', 400);
     }
 
-    const user = await User.findById(userId);
-    if (!user) {
+    const before = await User.findById(userId).select('loyalty').lean();
+    if (!before) {
       throw createError('User not found', 404);
     }
 
-    const oldTier = user.loyalty.tier;
+    const oldTier = normalizeLoyalty(before.loyalty).tier;
     const isAddition = points > 0;
 
-    if (isAddition) {
-      user.loyalty.points += points;
-      user.loyalty.totalEarned += points;
-    } else {
-      if (user.loyalty.points < Math.abs(points)) {
-        throw createError('Insufficient points balance', 400);
-      }
-      user.loyalty.points += points; // points is negative
-      user.loyalty.totalRedeemed += Math.abs(points);
+    const update = isAddition
+      ? { $inc: { 'loyalty.points': points, 'loyalty.totalEarned': points } }
+      : { $inc: { 'loyalty.points': points, 'loyalty.totalRedeemed': Math.abs(points) } };
+
+    const guard = isAddition
+      ? { _id: userId }
+      : { _id: userId, 'loyalty.points': { $gte: Math.abs(points) } };
+
+    const user = await User.findOneAndUpdate(guard, update, { new: true, select: 'loyalty' }).lean();
+
+    if (!user) {
+      throw createError('Insufficient points balance', 400);
     }
 
-    const newTier = calculateTier(user.loyalty.totalEarned);
-    user.loyalty.tier = newTier;
-
-    await user.save();
+    const loyalty = normalizeLoyalty(user.loyalty);
+    const newTier = calculateTier(loyalty.totalEarned);
+    if (newTier !== oldTier) {
+      await User.findByIdAndUpdate(userId, { $set: { 'loyalty.tier': newTier } });
+      loyalty.tier = newTier;
+    }
 
     // Create transaction record
     await LoyaltyTransaction.create({
@@ -208,7 +321,7 @@ export const adjustPoints = async (req, res, next) => {
       points: points,
       source: 'manual_adjustment',
       description: notes || `Manual adjustment by admin`,
-      balanceAfter: user.loyalty.points,
+      balanceAfter: loyalty.points,
       tierBefore: oldTier,
       tierAfter: newTier !== oldTier ? newTier : null,
       adjustedBy: req.user._id,
@@ -218,7 +331,7 @@ export const adjustPoints = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: 'Points adjusted successfully',
-      loyalty: user.loyalty
+      loyalty
     });
   } catch (error) {
     next(error);
@@ -228,9 +341,8 @@ export const adjustPoints = async (req, res, next) => {
 // Get all users loyalty info (admin only)
 export const getAllUsersLoyalty = async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, tier, search } = req.query;
-
-    console.log('Fetching loyalty users with params:', { page, limit, tier, search });
+    const { tier, search } = req.query;
+    const { page, limit, skip } = parsePageParams(req.query, 20);
 
     const filter = { role: 'user' };
     if (tier) {
@@ -245,27 +357,96 @@ export const getAllUsersLoyalty = async (req, res, next) => {
       ];
     }
 
-    const users = await User.find(filter)
-      .select('firstName lastName email loyalty phone')
-      .sort({ 'loyalty.totalEarned': -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
-
-    const total = await User.countDocuments(filter);
-
-    console.log('Found loyalty users:', users.length, 'total:', total);
+    const [users, total] = await Promise.all([
+      User.find(filter)
+        .select('firstName lastName email loyalty phone createdAt updatedAt')
+        .sort(withStableTiebreaker({ 'loyalty.totalEarned': -1 }))
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      User.countDocuments(filter),
+    ]);
 
     res.status(200).json({
       success: true,
-      users,
-      pagination: {
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(total / limit),
-        total
-      }
+      users: users.map((user) => ({ ...user, loyalty: normalizeLoyalty(user.loyalty) })),
+      pagination: buildPaginationMeta({ page, limit }, total),
     });
   } catch (error) {
-    console.error('Error in getAllUsersLoyalty:', error);
+    next(error);
+  }
+};
+
+// Aggregate loyalty figures for the admin dashboard (admin only)
+export const getLoyaltyStats = async (req, res, next) => {
+  try {
+    const [userStats] = await User.aggregate([
+      { $match: { role: 'user' } },
+      {
+        $group: {
+          _id: null,
+          totalUsers: { $sum: 1 },
+          activeUsers: { $sum: { $cond: [{ $gt: ['$loyalty.points', 0] }, 1, 0] } },
+          totalPointsEarned: { $sum: { $ifNull: ['$loyalty.totalEarned', 0] } },
+          totalPointsRedeemed: { $sum: { $ifNull: ['$loyalty.totalRedeemed', 0] } },
+          totalPointsAvailable: { $sum: { $ifNull: ['$loyalty.points', 0] } },
+        },
+      },
+    ]);
+
+    const tierBreakdown = await User.aggregate([
+      { $match: { role: 'user' } },
+      { $group: { _id: { $ifNull: ['$loyalty.tier', 'bronze'] }, count: { $sum: 1 } } },
+    ]);
+
+    res.status(200).json({
+      success: true,
+      stats: {
+        totalUsers: userStats?.totalUsers ?? 0,
+        activeUsers: userStats?.activeUsers ?? 0,
+        totalPointsEarned: userStats?.totalPointsEarned ?? 0,
+        totalPointsRedeemed: userStats?.totalPointsRedeemed ?? 0,
+        totalPointsAvailable: userStats?.totalPointsAvailable ?? 0,
+        tiers: tierBreakdown.reduce(
+          (acc, { _id, count }) => ({ ...acc, [_id]: count }),
+          { bronze: 0, silver: 0, gold: 0, platinum: 0 }
+        ),
+        thresholds: TIER_THRESHOLDS,
+        pointsPerEgp: POINTS_PER_EGP,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get every loyalty transaction (admin only)
+export const getAllTransactionsAdmin = async (req, res, next) => {
+  try {
+    const { type, source } = req.query;
+    const { page, limit, skip } = parsePageParams(req.query, 20);
+
+    const filter = {};
+    if (type) filter.type = type;
+    if (source) filter.source = source;
+
+    const [transactions, total] = await Promise.all([
+      LoyaltyTransaction.find(filter)
+        .populate('user', 'firstName lastName email phone')
+        .populate('adjustedBy', 'firstName lastName')
+        .sort(withStableTiebreaker({ createdAt: -1 }))
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      LoyaltyTransaction.countDocuments(filter),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      transactions,
+      pagination: buildPaginationMeta({ page, limit }, total),
+    });
+  } catch (error) {
     next(error);
   }
 };
@@ -274,30 +455,33 @@ export const getAllUsersLoyalty = async (req, res, next) => {
 export const getUserTransactionsAdmin = async (req, res, next) => {
   try {
     const { userId } = req.params;
-    const { page = 1, limit = 20, type } = req.query;
+    const { type } = req.query;
+    const { page, limit, skip } = parsePageParams(req.query, 20);
+
+    if (!mongoose.isValidObjectId(userId)) {
+      throw createError('Invalid user id', 400);
+    }
 
     const filter = { user: userId };
     if (type) {
       filter.type = type;
     }
 
-    const transactions = await LoyaltyTransaction.find(filter)
-      .populate('user', 'firstName lastName email')
-      .populate('adjustedBy', 'firstName lastName')
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
-
-    const total = await LoyaltyTransaction.countDocuments(filter);
+    const [transactions, total] = await Promise.all([
+      LoyaltyTransaction.find(filter)
+        .populate('user', 'firstName lastName email')
+        .populate('adjustedBy', 'firstName lastName')
+        .sort(withStableTiebreaker({ createdAt: -1 }))
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      LoyaltyTransaction.countDocuments(filter),
+    ]);
 
     res.status(200).json({
       success: true,
       transactions,
-      pagination: {
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(total / limit),
-        total
-      }
+      pagination: buildPaginationMeta({ page, limit }, total),
     });
   } catch (error) {
     next(error);

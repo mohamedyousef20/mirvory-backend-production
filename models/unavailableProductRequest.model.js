@@ -18,6 +18,19 @@ const unavailableProductRequestSchema = new mongoose.Schema({
     default: null
   },
 
+  // Requested product: kept as a loose reference plus a snapshot of the name so
+  // the request survives the product being deleted.
+  product: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Product',
+    default: null
+  },
+  productName: {
+    type: String,
+    default: null,
+    trim: true
+  },
+
   // Phone number (required for both authenticated and guest)
   phone: {
     type: String,
@@ -33,20 +46,38 @@ const unavailableProductRequestSchema = new mongoose.Schema({
   // Request details
   size: {
     type: String,
-    required: true,
+    default: null,
     trim: true
   },
 
-  // Product image
+  color: {
+    type: String,
+    default: null,
+    trim: true
+  },
+
+  quantity: {
+    type: Number,
+    default: 1,
+    min: 1
+  },
+
+  notes: {
+    type: String,
+    default: null,
+    trim: true
+  },
+
+  // Product image (optional — a request may instead reference a product)
   image: {
     type: String,
-    required: true
+    default: null
   },
 
   // Cloudinary public_id for image deletion
   imagePublicId: {
     type: String,
-    required: true
+    default: null
   },
 
   // Request status
@@ -76,5 +107,7 @@ const unavailableProductRequestSchema = new mongoose.Schema({
 unavailableProductRequestSchema.index({ user: 1, createdAt: -1 });
 unavailableProductRequestSchema.index({ status: 1, createdAt: -1 });
 unavailableProductRequestSchema.index({ phone: 1 });
+unavailableProductRequestSchema.index({ productName: 1 });
+unavailableProductRequestSchema.index({ createdAt: -1, _id: -1 });
 
 export default mongoose.model('UnavailableProductRequest', unavailableProductRequestSchema);
