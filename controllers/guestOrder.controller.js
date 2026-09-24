@@ -218,6 +218,26 @@ export const createGuestOrder = async (req, res, next) => {
     const bulkResult = await Product.bulkWrite(bulkOps);
 
     if (bulkResult.modifiedCount !== items.length) {
+      // ── Partial failure: roll back decremented products ──────────────────
+      // productMap holds the pre-decrement quantities fetched from DB.
+      // Any product whose current quantity < original was actually decremented.
+      const rollbackOps = items.map((item) => {
+        const orig = productMap[item.productId.toString()];
+        return {
+          updateOne: {
+            filter: {
+              _id: new mongoose.Types.ObjectId(item.productId),
+              quantity: { $lt: orig.quantity }, // was decremented
+            },
+            update: { $inc: { quantity: item.quantity, sold: -item.quantity } },
+          },
+        };
+      });
+      try {
+        await Product.bulkWrite(rollbackOps);
+      } catch (rollbackErr) {
+        console.error('[CRITICAL] Guest order stock rollback failed:', rollbackErr);
+      }
       throw new createError(
         "بعض المنتجات نفذت من المخزون أثناء تأكيد الطلب",
         400

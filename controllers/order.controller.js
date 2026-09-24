@@ -138,6 +138,25 @@ export const createOrder = async (req, res, next) => {
 
     const result = await Product.bulkWrite(bulkOps);
     if (result.modifiedCount !== orderItemsSource.length) {
+      // ── Partial failure: roll back any items that WERE decremented ──────
+      // If 3 of 4 products decremented but the 4th ran out of stock,
+      // the order is rejected — but those 3 decrements must be reversed
+      // or stock will be permanently corrupted without an actual order.
+      // We detect a decremented product by: currentQty < originalQty.
+      const rollbackOps = orderItemsSource.map((item) => ({
+        updateOne: {
+          filter: {
+            _id: item.product._id,
+            quantity: { $lt: item.product.quantity }, // was actually decremented
+          },
+          update: { $inc: { quantity: item.quantity, sold: -item.quantity } },
+        },
+      }));
+      try {
+        await Product.bulkWrite(rollbackOps);
+      } catch (rollbackErr) {
+        console.error('[CRITICAL] Stock rollback failed after partial bulkWrite:', rollbackErr);
+      }
       throw new createError("بعض المنتجات نفذت من المخزون", 400);
     }
 
@@ -285,7 +304,18 @@ export const orderComplete = async (req, res, next) => {
       )
     );
 
-    // 3. الإشعارات (fire-and-forget)
+    // 3. منح نقاط الولاء للمشتري عند التسليم بالكود السري
+    if (order.buyer) {
+      (async () => {
+        try {
+          await earnPointsFromOrder(order.buyer.toString(), order._id.toString(), order.total);
+        } catch (err) {
+          console.error('[Loyalty] orderComplete — failed to award points:', err);
+        }
+      })();
+    }
+
+    // 4. الإشعارات (fire-and-forget)
     (async () => {
       try {
         const io = req.app.get("io");
