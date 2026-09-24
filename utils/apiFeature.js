@@ -1,3 +1,5 @@
+import { parsePageParams } from './pagination.js';
+
 class apiFeature {
     constructor(mongooseQuery, queryStr) {
         this.mongooseQuery = mongooseQuery
@@ -39,12 +41,11 @@ class apiFeature {
         // ## => Sorting Method
         if (this.queryStr.sort) {
 
-            this.mongooseQuery = this.mongooseQuery.sort(
-                this.queryStr.sort.split(",").join(" "),
-
-            );
+            const fields = this.queryStr.sort.split(",").map((field) => field.trim()).filter(Boolean);
+            if (!fields.some((field) => field.replace(/^-/, "") === "_id")) fields.push("-_id");
+            this.mongooseQuery = this.mongooseQuery.sort(fields.join(" "));
         } else {
-            this.mongooseQuery = this.mongooseQuery.sort("-createdAt");
+            this.mongooseQuery = this.mongooseQuery.sort("-createdAt -_id");
         }
 
         return this;
@@ -72,9 +73,7 @@ class apiFeature {
     }
     pagination(numberOfDocuments) {
         // ## => Pagination
-        const page = parseInt(this.queryStr.page) || 1; //to convert it into number or parsInt
-        const limit = parseInt(this.queryStr.limit) || 8;
-        const skip = (page - 1) * limit;
+        const { page, limit, skip } = parsePageParams(this.queryStr, 8);
         const endIndex = page * limit;
         const pagination = {};
         pagination.page = page;
@@ -88,7 +87,7 @@ class apiFeature {
 
         // ## => Previous Page
 
-        if (endIndex > 1) {
+        if (page > 1) {
             pagination.prev = page - 1;
         }
         this.mongooseQuery = this.mongooseQuery.skip(skip).limit(limit);

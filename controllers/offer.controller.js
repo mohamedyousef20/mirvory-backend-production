@@ -4,6 +4,11 @@ import Category from '../models/category.model.js';
 import createError from '../utils/error.js';
 import mongoose from 'mongoose';
 import { uploadImage, removeImage } from '../services/imageUploadService.js';
+import {
+  buildPaginationMeta,
+  parsePageParams,
+  withStableTiebreaker,
+} from '../utils/pagination.js';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
@@ -85,9 +90,7 @@ export const getOffers = async (req, res, next) => {
       throw new createError("صلاحيات غير كافية", 403);
     }
 
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = parsePageParams(req.query, 10);
     const { status, type } = req.query;
 
     const filter = {};
@@ -109,7 +112,7 @@ export const getOffers = async (req, res, next) => {
       .populate('applicableProducts', 'title price images')
       .populate('applicableCategories', 'name')
       .populate('createdBy', 'firstName lastName')
-      .sort({ createdAt: -1 })
+      .sort(withStableTiebreaker({ createdAt: -1 }))
       .skip(skip)
       .limit(limit)
       .lean();
@@ -118,7 +121,7 @@ export const getOffers = async (req, res, next) => {
 
     res.status(200).json({
       data: offers,
-      pagination: { currentPage: page, totalPages: Math.ceil(total / limit), total }
+      pagination: buildPaginationMeta({ page, limit }, total),
     });
   } catch (error) {
     next(error);

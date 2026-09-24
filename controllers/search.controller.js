@@ -3,6 +3,11 @@ import User from '../models/user.model.js';
 import SearchHistory from '../models/searchHistory.model.js';
 import mongoose from 'mongoose';
 import createError from '../utils/error.js';
+import {
+  buildPaginationMeta,
+  parsePageParams,
+  withStableTiebreaker,
+} from '../utils/pagination.js';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
@@ -22,9 +27,7 @@ export const searchProducts = async (req, res, next) => {
       sort = 'latest',
       availability
     } = req.query;
-    const pageNum = parseInt(page);
-    const limitNum = Math.min(parseInt(limit), 50);
-    const skip = (pageNum - 1) * limitNum;
+    const { page: pageNum, limit: limitNum, skip } = parsePageParams({ page, limit }, 12);
 
     // 1. بناء الفلتر الأساسي للمنتجات المتاحة والمقبولة
     const filter = {
@@ -75,7 +78,7 @@ export const searchProducts = async (req, res, next) => {
     const products = await Product.find(filter)
       .populate('seller', 'firstName lastName')
       .populate('category', 'name nameEn')
-      .sort(sortOption)
+      .sort(withStableTiebreaker(sortOption))
       .skip(skip)
       .limit(limitNum)
       .lean();
@@ -92,11 +95,14 @@ export const searchProducts = async (req, res, next) => {
       );
     }
 
+    const pagination = buildPaginationMeta({ page: pageNum, limit: limitNum }, total);
+
     res.status(200).json({
       success: true,
       total,
       page: pageNum,
-      pages: Math.ceil(total / limitNum),
+      pages: pagination.totalPages,
+      pagination,
       products
     });
 

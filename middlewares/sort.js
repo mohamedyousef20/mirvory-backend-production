@@ -4,6 +4,8 @@
  * Supports multiple sort fields and directions
  */
 
+import { withStableTiebreaker } from '../utils/pagination.js';
+
 export const sort = (defaultSort = { createdAt: -1 }) => {
   return (req, res, next) => {
     try {
@@ -17,13 +19,14 @@ export const sort = (defaultSort = { createdAt: -1 }) => {
         sortObj = {};
         sortFields.forEach((field) => {
           const [fieldName, direction] = field.split(':');
+          if (!fieldName) return;
           const sortDirection = direction === 'asc' ? 1 : -1;
           sortObj[fieldName] = sortDirection;
         });
       }
 
       // Add sort object to request
-      req.sort = sortObj;
+      req.sort = withStableTiebreaker(sortObj);
 
       next();
     } catch (error) {
@@ -50,10 +53,11 @@ export const commonSortOptions = {
  * Helper to get sort object from string
  */
 export const getSortFromString = (sortString) => {
-  if (!sortString) return { createdAt: -1 };
-  if (commonSortOptions[sortString]) return commonSortOptions[sortString];
-  
+  if (!sortString) return withStableTiebreaker({ createdAt: -1 });
+  if (commonSortOptions[sortString]) return withStableTiebreaker(commonSortOptions[sortString]);
+
   // Parse custom sort format
   const [field, direction] = sortString.split(':');
-  return { [field]: direction === 'asc' ? 1 : -1 };
+  if (!field) return withStableTiebreaker({ createdAt: -1 });
+  return withStableTiebreaker({ [field]: direction === 'asc' ? 1 : -1 });
 };

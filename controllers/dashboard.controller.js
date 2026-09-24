@@ -1,6 +1,11 @@
 import Order from '../models/order.model.js';
 import Product from '../models/product.model.js';
 import User from '../models/user.model.js';
+import {
+  buildPaginationMeta,
+  parsePageParams,
+  withStableTiebreaker,
+} from '../utils/pagination.js';
 
 // Seller Dashboard Controllers
 export const getSellerCounters = async (req, res) => {
@@ -114,25 +119,21 @@ export const getSellerAnalytics = async (req, res) => {
 export const getSellerTransactions = async (req, res) => {
   try {
     const sellerId = req.user._id;
-    const { page = 1, limit = 10 } = req.query;
+    const { page, limit, skip } = parsePageParams(req.query, 10);
 
-    const orders = await Order.find({ 'items.seller': sellerId })
-      .populate('items.product', 'title images')
-      .sort({ createdAt: -1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit);
-
-    const total = await Order.countDocuments({ 'items.seller': sellerId });
+    const [orders, total] = await Promise.all([
+      Order.find({ 'items.seller': sellerId })
+        .populate('items.product', 'title images')
+        .sort(withStableTiebreaker({ createdAt: -1 }))
+        .skip(skip)
+        .limit(limit),
+      Order.countDocuments({ 'items.seller': sellerId }),
+    ]);
 
     res.json({
       success: true,
       data: orders,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / limit)
-      }
+      pagination: buildPaginationMeta({ page, limit }, total),
     });
   } catch (error) {
     console.error('Get seller transactions error:', error);
@@ -356,25 +357,21 @@ export const getAdminAnalytics = async (req, res) => {
 
 export const getAdminTransactions = async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
+    const { page, limit, skip } = parsePageParams(req.query, 10);
 
-    const orders = await Order.find({})
-      .populate('buyer', 'firstName lastName email')
-      .sort({ createdAt: -1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit);
-
-    const total = await Order.countDocuments();
+    const [orders, total] = await Promise.all([
+      Order.find({})
+        .populate('buyer', 'firstName lastName email')
+        .sort(withStableTiebreaker({ createdAt: -1 }))
+        .skip(skip)
+        .limit(limit),
+      Order.countDocuments(),
+    ]);
 
     res.json({
       success: true,
       data: orders,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / limit)
-      }
+      pagination: buildPaginationMeta({ page, limit }, total),
     });
   } catch (error) {
     console.error('Get admin transactions error:', error);

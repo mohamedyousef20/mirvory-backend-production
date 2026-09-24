@@ -4,6 +4,7 @@ import User from '../models/user.model.js';
 import createError from '../utils/error.js';
 import { createNotifications } from '../utils/notification.js';
 import { formatPaginationResponse } from '../middlewares/pagination.js';
+import { withStableTiebreaker } from '../utils/pagination.js';
 
 // Create a new complaint
 export const createComplaint = async (req, res, next) => {
@@ -86,7 +87,7 @@ export const createComplaint = async (req, res, next) => {
 export const getMyComplaints = async (req, res, next) => {
   try {
     const { page, limit, skip } = req.pagination;
-    const sortObj = req.sort || { createdAt: -1 };
+    const sortObj = withStableTiebreaker(req.sort);
     const filterObj = req.filter || {};
     const searchFilter = req.searchFilter || {};
 
@@ -112,7 +113,7 @@ export const getMyComplaints = async (req, res, next) => {
 export const getAllComplaintsAdmin = async (req, res, next) => {
   try {
     const { page, limit, skip } = req.pagination;
-    const sortObj = req.sort || { createdAt: -1 };
+    const sortObj = withStableTiebreaker(req.sort);
     const filterObj = req.filter || {};
     const searchFilter = req.searchFilter || {};
 
@@ -138,7 +139,7 @@ export const getAllComplaintsAdmin = async (req, res, next) => {
 export const getAllComplaints = async (req, res, next) => {
   try {
     const { page, limit, skip } = req.pagination;
-    const sortObj = req.sort || { createdAt: -1 };
+    const sortObj = withStableTiebreaker(req.sort);
     const filterObj = req.filter || {};
     const searchFilter = req.searchFilter || {};
 

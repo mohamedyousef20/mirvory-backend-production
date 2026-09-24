@@ -5,6 +5,11 @@ import User from '../models/user.model.js';
 import { createNotifications } from '../utils/notification.js';
 import mongoose from 'mongoose';
 import createError from '../utils/error.js';
+import {
+  buildPaginationMeta,
+  parsePageParams,
+  withStableTiebreaker,
+} from '../utils/pagination.js';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
@@ -126,24 +131,26 @@ export const getReturnRequestsForAdmin = async (req, res, next) => {
       throw new createError("غير مصرح بالدخول", 403);
     }
 
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = parsePageParams(req.query, 10);
+    const filter = {};
+    if (req.query.status) filter.status = req.query.status;
 
-    const returnRequests = await ReturnRequest.find({})
-      .populate('user', 'firstName lastName email phone')
-      .populate('seller', 'firstName lastName email phone')
-      .populate('order', 'orderNumber buyer')
-      .populate('product', 'title price images')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
+    const [returnRequests, total] = await Promise.all([
+      ReturnRequest.find(filter)
+        .populate('user', 'firstName lastName email phone')
+        .populate('seller', 'firstName lastName email phone')
+        .populate('order', 'orderNumber buyer')
+        .populate('product', 'title price images')
+        .sort(withStableTiebreaker({ createdAt: -1 }))
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      ReturnRequest.countDocuments(filter),
+    ]);
 
-    const total = await ReturnRequest.countDocuments();
     res.status(200).json({
       data: returnRequests,
-      pagination: { currentPage: page, totalPages: Math.ceil(total / limit), total }
+      pagination: buildPaginationMeta({ page, limit }, total),
     });
   } catch (error) {
     next(error);
