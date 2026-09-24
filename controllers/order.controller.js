@@ -68,25 +68,68 @@ export const createOrderFilterObj = (req, res, next) => {
 };
 
 export const createOrder = async (req, res, next) => {
-
   try {
-    const { deliveryMethod, paymentMethod, deliveryInfo } = req.body;
+    const { deliveryMethod, paymentMethod, deliveryInfo, items: buyNowItems } = req.body;
 
     if (!deliveryInfo?.fullName || !deliveryInfo?.phone) {
       throw new createError("بيانات التوصيل (الاسم والرقم) مطلوبة", 400);
     }
 
-    const cart = await Cart.findOne({ user: req.user._id })
-      .populate({
-        path: "items.product",
-        select: "price seller quantity title images colors"
-      });
+    // orderItemsSource: مصفوفة موحّدة { product, quantity, colors, sizes, image }
+    // تُبنى إما من عناصر "اشترِ الآن" المرسلة مباشرة، أو من سلة اليوزر كالمعتاد.
+    let orderItemsSource;
+    let appliedCoupon = null;
+    let cart = null; // يبقى null في وضع "اشترِ الآن" — مفيش سلة نحذفها
 
-    if (!cart || cart.items.length === 0) {
-      throw new createError("السلة فارغة", 404);
+    if (Array.isArray(buyNowItems) && buyNowItems.length > 0) {
+      // ─── وضع الشراء المباشر: من غير أي لمس لسلة اليوزر المحفوظة ───
+      const ids = buyNowItems.map((it) => it.productId);
+      if (ids.some((id) => !isValidObjectId(id))) {
+        throw new createError("معرف منتج غير صالح", 400);
+      }
+
+      const products = await Product.find({ _id: { $in: ids } })
+        .select("price discountedPrice seller quantity title images colors sizes status");
+      const productsById = new Map(products.map((p) => [p._id.toString(), p]));
+
+      orderItemsSource = buyNowItems.map((it) => {
+        const product = productsById.get(it.productId);
+        if (!product || product.status !== "available") {
+          throw new createError("أحد المنتجات لم يعد متوفراً", 400);
+        }
+        const quantity = Math.max(1, parseInt(it.quantity) || 1);
+        return {
+          product,
+          quantity,
+          colors: it.color ? [it.color] : [],
+          sizes: it.size ? [it.size] : [],
+          image: it.image || product.images?.[0] || null,
+        };
+      });
+      // لا يوجد كوبون مطبّق في الشراء المباشر (مفيش سلة أصلاً)
+    } else {
+      // ─── الوضع الحالي بدون أي تغيير: من سلة اليوزر ───
+      cart = await Cart.findOne({ user: req.user._id })
+        .populate({
+          path: "items.product",
+          select: "price discountedPrice seller quantity title images colors sizes status",
+        });
+
+      if (!cart || cart.items.length === 0) {
+        throw new createError("السلة فارغة", 404);
+      }
+
+      orderItemsSource = cart.items.map((item) => ({
+        product: item.product,
+        quantity: item.quantity,
+        colors: item.colors,
+        sizes: item.sizes,
+        image: item.image,
+      }));
+      appliedCoupon = cart.appliedCoupon || null;
     }
 
-    const bulkOps = cart.items.map((item) => ({
+    const bulkOps = orderItemsSource.map((item) => ({
       updateOne: {
         filter: { _id: item.product._id, quantity: { $gte: item.quantity } },
         update: { $inc: { quantity: -item.quantity, sold: item.quantity } },
@@ -94,62 +137,44 @@ export const createOrder = async (req, res, next) => {
     }));
 
     const result = await Product.bulkWrite(bulkOps);
-    if (result.modifiedCount !== cart.items.length) {
+    if (result.modifiedCount !== orderItemsSource.length) {
       throw new createError("بعض المنتجات نفذت من المخزون", 400);
     }
 
-    const subtotal = cart.items.reduce(
+    const subtotal = orderItemsSource.reduce(
       (sum, item) => sum + getEffectivePrice(item.product) * item.quantity,
       0
     );
-    const discount = cart.appliedCoupon?.discountAmount || 0;
+    const discount = appliedCoupon?.discountAmount || 0;
 
-    // Get shipping settings and calculate shipping fee
     const shippingSettings = await ShippingSettings.getSettings();
     let shippingFee = shippingSettings.shippingFee;
 
-    // Free shipping based on minimum order
     if (shippingSettings.freeShippingEnabled && subtotal >= shippingSettings.freeShippingMinimum) {
       shippingFee = 0;
     }
-
-    // Free pickup shipping
-    if (shippingSettings.freePickupShipping && deliveryMethod === 'pickup') {
+    if (shippingSettings.freePickupShipping && deliveryMethod === "pickup") {
       shippingFee = 0;
     }
-
-    // Free metro shipping (if address is provided)
     if (shippingSettings.freeMetroShipping && deliveryInfo.address) {
-      const isMetro = shippingSettings.metroAreas?.some(area =>
+      const isMetro = shippingSettings.metroAreas?.some((area) =>
         deliveryInfo.address.toLowerCase().includes(area.toLowerCase())
       );
-      if (isMetro) {
-        shippingFee = 0;
-      }
+      if (isMetro) shippingFee = 0;
     }
 
     const total = Math.max(0, subtotal - discount + shippingFee);
     const secretCode = await generateUniqueSecretCode(req.user._id);
-    console.log(
-      "CART ITEMS BEFORE ORDER:",
-      cart.items.map(item => ({
-        product: item.product?._id,
-        colors: item.colors,
-        image: item.image,
-        productFirstImage: item.product?.images?.[0]
-      }))
-    );
+
     const [order] = await Order.create([{
       buyer: req.user._id,
-      items: cart.items.map((item) => ({
+      items: orderItemsSource.map((item) => ({
         product: item.product._id,
         seller: item.product.seller,
         quantity: item.quantity,
         price: getEffectivePrice(item.product),
         color: item.colors?.[0] || null,
         size: item.sizes?.[0] || null,
-
-        // Save the exact product image used for this cart item
         image: item.image || item.product.images?.[0] || null,
       })),
       paymentMethod: paymentMethod || "cash",
@@ -163,36 +188,20 @@ export const createOrder = async (req, res, next) => {
         pickupPoint: deliveryMethod === "pickup" ? deliveryInfo.pickupPoint : undefined,
       },
       subtotal, discount, shippingFee, total,
-      coupon: cart.appliedCoupon || null,
+      coupon: appliedCoupon,
       secretCode,
     }]);
 
-    // Delete cart and skip redundant order.save() (order was just created)
-    await Cart.findByIdAndDelete(cart._id);
+    // نحذف السلة فقط لو الطلب اتعمل من السلة فعلاً (مش من "اشترِ الآن")
+    if (cart) {
+      await Cart.findByIdAndDelete(cart._id);
+    }
 
-    // Fire-and-forget notifications (non-blocking)
     (async () => {
       try {
         const io = req.app.get("io");
-        const sellerIds = [...new Set(cart.items.map(i => i.product.seller.toString()))];
-
-        // Parallel notifications to all sellers + buyer + admin
-        (async () => {
-          try {
-            const io = req.app.get("io");
-            const admin = await User.findOne({ role: 'admin' }).select('_id');
-
-            await createNotifications({
-              io, title: "🔔 طلب جديد",
-              message: ` طلب جديد. رقم الطلب: ${order._id.toString().slice(-6)}`,
-              type: "ORDER_PLACED",
-              actor: req.user._id, userId: sellerId,
-              userId: admin._id.toString(),
-              data: { orderId: order._id }, link: `/orders/${order._id}`,
-            });
-
-          } catch (err) { console.error("Notification Error:", err); }
-        })();
+        const sellerIds = [...new Set(orderItemsSource.map((i) => i.product.seller.toString()))];
+        const admin = await User.findOne({ role: "admin" }).select("_id");
 
         await Promise.all([
           ...sellerIds.map((sellerId) =>
@@ -200,7 +209,7 @@ export const createOrder = async (req, res, next) => {
               io, title: "🔔 طلب جديد",
               message: `لديك طلب جديد. رقم الطلب: ${order._id.toString().slice(-6)}`,
               type: "ORDER_PLACED", actor: req.user._id, userId: sellerId,
-              data: { orderId: order._id }, link: `/seller/orders/${order._id}`,
+              data: { orderId: order._id }, link: `/orders/${order._id}`,
             })
           ),
           createNotifications({
@@ -210,9 +219,16 @@ export const createOrder = async (req, res, next) => {
             userId: req.user._id.toString(),
             data: { orderId: order._id }, link: `/orders/${order._id}`,
           }),
+          ...(admin ? [createNotifications({
+            io, title: "🔔 طلب جديد",
+            message: `طلب جديد. رقم الطلب: ${order._id.toString().slice(-6)}`,
+            type: "ORDER_PLACED", actor: req.user._id,
+            userId: admin._id.toString(),
+            data: { orderId: order._id }, link: `/orders/${order._id}`,
+          })] : []),
         ]);
       } catch (err) {
-        if (process.env.NODE_ENV !== 'production') console.error("Notification Error:", err);
+        if (process.env.NODE_ENV !== "production") console.error("Notification Error:", err);
       }
     })();
 
@@ -221,7 +237,6 @@ export const createOrder = async (req, res, next) => {
     next(error);
   }
 };
-
 export const orderComplete = async (req, res, next) => {
   try {
     const { id, code } = req.body;
