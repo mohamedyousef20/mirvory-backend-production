@@ -69,16 +69,16 @@ const unavailableProductRequestSchema = new mongoose.Schema({
   },
 
   // Product image (optional — a request may instead reference a product)
-  image: {
+  imageUrl: {
     type: String,
     default: null
   },
 
-  // Cloudinary public_id for image deletion
-  imagePublicId: {
-    type: String,
-    default: null
-  },
+  // // Cloudinary public_id for image deletion
+  // imagePublicId: {
+  //   type: String,
+  //   default: null
+  // },
 
   // Request status
   status: {

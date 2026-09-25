@@ -1,7 +1,6 @@
 import mongoose from 'mongoose';
 import UnavailableProductRequest from '../models/unavailableProductRequest.model.js';
 import Product from '../models/product.model.js';
-import { uploadImage, removeImage } from '../services/imageUploadService.js';
 import createError from '../utils/error.js';
 import {
   buildPaginationMeta,
@@ -38,36 +37,35 @@ export const createRequest = async (req, res, next) => {
     const guestEmail = trimmed(req.body?.guestEmail);
     const productId = trimmed(req.body?.productId) ?? trimmed(req.body?.product);
     let productName = trimmed(req.body?.productName);
-    const file = req.file;
-
+    const imageUrl = trimmed(req.body?.imageUrl);
     if (!phone) {
-      throw createError('Phone number is required', 400);
+      throw new createError('Phone number is required', 400);
     }
 
     // Validate phone format
     if (!/^01[0125][0-9]{8}$/.test(phone)) {
-      throw createError('Invalid Egyptian phone number format', 400);
+      throw new createError('Invalid Egyptian phone number format', 400);
     }
 
     if (guestEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guestEmail)) {
-      throw createError('Invalid email address', 400);
+      throw new createError('Invalid email address', 400);
     }
 
     const parsedQuantity = Number(req.body?.quantity ?? 1);
     if (!Number.isInteger(parsedQuantity) || parsedQuantity < 1) {
-      throw createError('Quantity must be a positive whole number', 400);
+      throw new createError('Quantity must be a positive whole number', 400);
     }
 
     // A request must identify what the customer wants: a product reference, a
     // free-text product name, or a photo.
-    if (!productId && !productName && !file) {
-      throw createError('Please provide a product, a product name, or an image', 400);
+    if (!productId && !productName && !imageUrl) {
+      throw new createError('Please provide a product, a product name, or an image', 400);
     }
 
     let product = null;
     if (productId) {
       if (!mongoose.isValidObjectId(productId)) {
-        throw createError('Invalid product id', 400);
+        throw new createError('Invalid product id', 400);
       }
       // The product may since have been deleted — the request is still valid,
       // it just keeps the name snapshot instead of a dangling reference.
@@ -75,16 +73,6 @@ export const createRequest = async (req, res, next) => {
       if (existing) {
         product = existing._id;
         productName = productName ?? existing.title ?? null;
-      }
-    }
-
-    let uploadResult = null;
-    if (file) {
-      try {
-        uploadResult = await uploadImage(file);
-      } catch (error) {
-        console.error('Image upload error:', error);
-        throw createError('Failed to upload image', 500);
       }
     }
 
@@ -97,8 +85,7 @@ export const createRequest = async (req, res, next) => {
       quantity: parsedQuantity,
       product,
       productName,
-      image: uploadResult?.url || null,
-      imagePublicId: uploadResult?.publicId || null,
+      imageUrl: imageUrl || null,
       user: req.user?._id || null,
       guestName: guestName || null,
       guestEmail: guestEmail || null,
@@ -135,7 +122,7 @@ export const getUserRequests = async (req, res, next) => {
 
     const [requests, total] = await Promise.all([
       UnavailableProductRequest.find(filter)
-        .populate('product', 'title images status')
+        .populate('product', 'title imageUrl status')
         .sort(withStableTiebreaker({ createdAt: -1 }))
         .skip(skip)
         .limit(limit)
@@ -187,7 +174,7 @@ export const getAllRequests = async (req, res, next) => {
     const [requests, total, statusCounts] = await Promise.all([
       UnavailableProductRequest.find(filter)
         .populate('user', 'firstName lastName email')
-        .populate('product', 'title images status')
+        .populate('product', 'title imageUrl status')
         .populate('createdBy', 'firstName lastName')
         .sort(withStableTiebreaker({ createdAt: -1 }))
         .skip(skip)
@@ -226,12 +213,12 @@ export const getRequestById = async (req, res, next) => {
     const { id } = req.params;
 
     if (!mongoose.isValidObjectId(id)) {
-      throw createError('Invalid request id', 400);
+      throw new createError('Invalid request id', 400);
     }
 
     const request = await UnavailableProductRequest.findById(id)
       .populate('user', 'firstName lastName email phone')
-      .populate('product', 'title images price status')
+      .populate('product', 'title imageUrl price status')
       .populate('createdBy', 'firstName lastName');
 
     if (!request) {
@@ -255,11 +242,11 @@ export const updateRequestStatus = async (req, res, next) => {
     const status = normalizeStatus(req.body?.status);
 
     if (!mongoose.isValidObjectId(id)) {
-      throw createError('Invalid request id', 400);
+      throw new createError('Invalid request id', 400);
     }
 
     if (!STATUSES.includes(status)) {
-      throw createError('Invalid status', 400);
+      throw new createError('Invalid status', 400);
     }
 
     const request = await UnavailableProductRequest.findById(id);
@@ -293,7 +280,7 @@ export const deleteRequest = async (req, res, next) => {
     const { id } = req.params;
 
     if (!mongoose.isValidObjectId(id)) {
-      throw createError('Invalid request id', 400);
+      throw new createError('Invalid request id', 400);
     }
 
     const request = await UnavailableProductRequest.findById(id);
@@ -302,16 +289,6 @@ export const deleteRequest = async (req, res, next) => {
       throw createError('Request not found', 404);
     }
 
-    // Delete image from Cloudinary
-    if (request.imagePublicId) {
-      try {
-        await removeImage(request.imagePublicId);
-        console.log(`Deleted image from Cloudinary: ${request.imagePublicId}`);
-      } catch (error) {
-        console.error(`Failed to delete image ${request.imagePublicId}:`, error);
-        // Continue with deletion even if Cloudinary delete fails
-      }
-    }
 
     await UnavailableProductRequest.findByIdAndDelete(id);
 

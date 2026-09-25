@@ -42,7 +42,7 @@ export const getUserLoyalty = async (req, res, next) => {
     const user = await User.findById(req.user._id).select('loyalty firstName lastName email');
 
     if (!user) {
-      throw createError('User not found', 404);
+      throw new createError('User not found', 404);
     }
 
     const loyalty = normalizeLoyalty(user.loyalty);
@@ -184,22 +184,22 @@ export const revokePointsFromOrder = async (userId, orderId, reason = 'order_rev
       userId,
       {
         $inc: { 'loyalty.points': -pointsToRevoke, 'loyalty.totalEarned': -(oldLoyalty.totalEarned - newTotalEarned) },
-        $set: { 'loyalty.tier': newTier },
+        $set: { 'loyalty.t     ier': newTier },
       },
       { new: true, select: 'loyalty' }
     ).lean();
 
     await LoyaltyTransaction.create({
       user: userId,
-      type: 'adjusted',
-      points: -pointsToRevoke,
-      source: 'manual_adjustment',
+      type: 'earned',
+      points: pointsToEarn,
+      source: 'order_completion',
       referenceId: orderId,
       referenceModel: 'Order',
-      description: `Points reverted for order #${orderId} (${reason})`,
-      balanceAfter: normalizeLoyalty(user?.loyalty).points,
+      description: `Points earned from order #${orderId}`,
+      balanceAfter,
       tierBefore: oldTier,
-      tierAfter: newTier !== oldTier ? newTier : null,
+      ...(newTier !== oldTier ? { tierAfter: newTier } : {}),
     });
   } catch (error) {
     console.error('Error revoking points:', error);
@@ -209,20 +209,21 @@ export const revokePointsFromOrder = async (userId, orderId, reason = 'order_rev
 // Redeem points (user)
 export const redeemPoints = async (req, res, next) => {
   try {
+    console.log('iminreedpoint')
     const points = Number(req.body?.points);
     const { orderId } = req.body || {};
 
     if (!Number.isInteger(points) || points <= 0) {
-      throw createError('Invalid points amount', 400);
+      throw new createError('Invalid points amount', 400);
     }
 
     if (orderId && !mongoose.isValidObjectId(orderId)) {
-      throw createError('Invalid order id', 400);
+      throw new createError('Invalid order id', 400);
     }
 
     const before = await User.findById(req.user._id).select('loyalty').lean();
     if (!before) {
-      throw createError('User not found', 404);
+      throw new createError('User not found', 404);
     }
 
     const oldTier = normalizeLoyalty(before.loyalty).tier;
@@ -236,7 +237,7 @@ export const redeemPoints = async (req, res, next) => {
     ).lean();
 
     if (!user) {
-      throw createError('Insufficient points balance', 400);
+      throw new createError('Insufficient points balance', 400);
     }
 
     const loyalty = normalizeLoyalty(user.loyalty);
@@ -256,8 +257,9 @@ export const redeemPoints = async (req, res, next) => {
       description: `Points redeemed for discount`,
       balanceAfter: loyalty.points,
       tierBefore: oldTier,
-      tierAfter: newTier !== oldTier ? newTier : null
-    });
+      tierAfter: oldTier,
+      ...(newTier !== oldTier ? { tierAfter: newTier } : {}),
+    });   
 
     res.status(200).json({
       success: true,
@@ -278,16 +280,16 @@ export const adjustPoints = async (req, res, next) => {
     const points = Number(req.body?.points);
 
     if (!userId || !mongoose.isValidObjectId(userId)) {
-      throw createError('User ID is required', 400);
+      throw new createError('User ID is required', 400);
     }
 
     if (!Number.isInteger(points) || points === 0) {
-      throw createError('Points amount is required', 400);
+      throw new createError('Points amount is required', 400);
     }
 
     const before = await User.findById(userId).select('loyalty').lean();
     if (!before) {
-      throw createError('User not found', 404);
+      throw new createError('User not found', 404);
     }
 
     const oldTier = normalizeLoyalty(before.loyalty).tier;
@@ -304,7 +306,7 @@ export const adjustPoints = async (req, res, next) => {
     const user = await User.findOneAndUpdate(guard, update, { new: true, select: 'loyalty' }).lean();
 
     if (!user) {
-      throw createError('Insufficient points balance', 400);
+      throw new createError('Insufficient points balance', 400);
     }
 
     const loyalty = normalizeLoyalty(user.loyalty);
@@ -459,7 +461,7 @@ export const getUserTransactionsAdmin = async (req, res, next) => {
     const { page, limit, skip } = parsePageParams(req.query, 20);
 
     if (!mongoose.isValidObjectId(userId)) {
-      throw createError('Invalid user id', 400);
+      throw new createError('Invalid user id', 400);
     }
 
     const filter = { user: userId };
