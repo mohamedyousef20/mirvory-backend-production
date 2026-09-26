@@ -17,6 +17,7 @@ import offerRoutes from './offer.routes.js';
 import shippingSettingsRoutes from './shippingSettings.routes.js';
 import unavailableProductRequestRoutes from './unavailableProductRequest.routes.js';
 import loyaltyRoutes from './loyalty.routes.js';
+import analyticsRoutes from './analytics.routes.js';
 
 const mountRoutes = (app) => {
     app.use('/api/products', productRoutes);
@@ -38,6 +39,7 @@ const mountRoutes = (app) => {
     app.use('/api/shipping-settings', shippingSettingsRoutes);
     app.use('/api/unavailable-product-requests', unavailableProductRequestRoutes);
     app.use('/api/loyalty', loyaltyRoutes);
+    app.use('/api/analytics', analyticsRoutes);
 };
 
 export default mountRoutes;
