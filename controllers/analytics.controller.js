@@ -14,7 +14,7 @@ import mongoose from 'mongoose';
 function buildDateRange(period, from, to) {
   const now = new Date();
   const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const endOfDay   = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+  const endOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
 
   switch (period) {
     case 'today': {
@@ -116,7 +116,7 @@ export const getFullAdminAnalytics = async (req, res) => {
     // Extra product-level filters applied after $unwind
     const itemFilters = {};
     if (productId) {
-      try { itemFilters['items.product'] = new mongoose.Types.ObjectId(productId); } catch {}
+      try { itemFilters['items.product'] = new mongoose.Types.ObjectId(productId); } catch { }
     }
     if (size) itemFilters['items.size'] = size;
     if (color) itemFilters['items.color.name'] = { $regex: color, $options: 'i' };
@@ -127,16 +127,16 @@ export const getFullAdminAnalytics = async (req, res) => {
       {
         $group: {
           _id: null,
-          totalOrders:    { $sum: 1 },
-          delivered:      { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'delivered'] }, 1, 0] } },
-          pending:        { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'pending'] }, 1, 0] } },
-          shipped:        { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'shipped'] }, 1, 0] } },
-          cancelled:      { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'cancelled'] }, 1, 0] } },
-          totalRevenue:   { $sum: '$total' },
-          totalSubtotal:  { $sum: '$subtotal' },
-          totalDiscount:  { $sum: { $ifNull: ['$discount', 0] } },
-          totalShipping:  { $sum: { $ifNull: ['$shippingFee', 0] } },
-          uniqueBuyers:   { $addToSet: '$buyer' },
+          totalOrders: { $sum: 1 },
+          delivered: { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'delivered'] }, 1, 0] } },
+          pending: { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'pending'] }, 1, 0] } },
+          shipped: { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'shipped'] }, 1, 0] } },
+          cancelled: { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'cancelled'] }, 1, 0] } },
+          totalRevenue: { $sum: '$total' },
+          totalSubtotal: { $sum: '$subtotal' },
+          totalDiscount: { $sum: { $ifNull: ['$discount', 0] } },
+          totalShipping: { $sum: { $ifNull: ['$shippingFee', 0] } },
+          uniqueBuyers: { $addToSet: '$buyer' },
         }
       },
       {
@@ -156,11 +156,11 @@ export const getFullAdminAnalytics = async (req, res) => {
           uniqueBuyerCount: { $size: '$uniqueBuyers' },
           completionRate: {
             $cond: [{ $gt: ['$totalOrders', 0] },
-              { $multiply: [{ $divide: ['$delivered', '$totalOrders'] }, 100] }, 0]
+            { $multiply: [{ $divide: ['$delivered', '$totalOrders'] }, 100] }, 0]
           },
           cancellationRate: {
             $cond: [{ $gt: ['$totalOrders', 0] },
-              { $multiply: [{ $divide: ['$cancelled', '$totalOrders'] }, 100] }, 0]
+            { $multiply: [{ $divide: ['$cancelled', '$totalOrders'] }, 100] }, 0]
           },
         }
       }
@@ -170,8 +170,8 @@ export const getFullAdminAnalytics = async (req, res) => {
     const dateGroupExpr = groupBy === 'month'
       ? { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } }
       : groupBy === 'week'
-      ? { year: { $year: '$createdAt' }, week: { $week: '$createdAt' } }
-      : { year: { $year: '$createdAt' }, month: { $month: '$createdAt' }, day: { $dayOfMonth: '$createdAt' } };
+        ? { year: { $year: '$createdAt' }, week: { $week: '$createdAt' } }
+        : { year: { $year: '$createdAt' }, month: { $month: '$createdAt' }, day: { $dayOfMonth: '$createdAt' } };
 
     const salesOverTimePipeline = [
       { $match: currMatch },
@@ -205,10 +205,10 @@ export const getFullAdminAnalytics = async (req, res) => {
       {
         $group: {
           _id: '$items.product',
-          ordersCount:   { $sum: 1 },
-          qtySold:       { $sum: '$items.quantity' },
-          revenue:       { $sum: { $multiply: ['$items.price', '$items.quantity'] } },
-          avgPrice:      { $avg: '$items.price' },
+          ordersCount: { $sum: 1 },
+          qtySold: { $sum: '$items.quantity' },
+          revenue: { $sum: { $multiply: ['$items.price', '$items.quantity'] } },
+          avgPrice: { $avg: '$items.price' },
           totalDiscount: { $sum: { $ifNull: ['$discount', 0] } },
           cancelledCount: {
             $sum: { $cond: [{ $eq: ['$deliveryStatus', 'cancelled'] }, 1, 0] }
@@ -223,7 +223,7 @@ export const getFullAdminAnalytics = async (req, res) => {
           as: 'productInfo'
         }
       },
-      { $unwind: { path: '$productInfo', preserveNullAndEmpty: true } },
+      { $unwind: { path: '$productInfo', preserveNullAndEmptyArrays: true } },
       {
         $project: {
           _id: 1,
@@ -236,7 +236,7 @@ export const getFullAdminAnalytics = async (req, res) => {
           cancelledCount: 1,
           cancelRate: {
             $cond: [{ $gt: ['$ordersCount', 0] },
-              { $multiply: [{ $divide: ['$cancelledCount', '$ordersCount'] }, 100] }, 0]
+            { $multiply: [{ $divide: ['$cancelledCount', '$ordersCount'] }, 100] }, 0]
           },
         }
       },
@@ -254,7 +254,7 @@ export const getFullAdminAnalytics = async (req, res) => {
         $group: {
           _id: '$items.size',
           ordersCount: { $sum: 1 },
-          qtySold:     { $sum: '$items.quantity' },
+          qtySold: { $sum: '$items.quantity' },
           cancelledCount: {
             $sum: { $cond: [{ $eq: ['$deliveryStatus', 'cancelled'] }, 1, 0] }
           },
@@ -268,7 +268,7 @@ export const getFullAdminAnalytics = async (req, res) => {
           cancelledCount: 1,
           cancelRate: {
             $cond: [{ $gt: ['$ordersCount', 0] },
-              { $multiply: [{ $divide: ['$cancelledCount', '$ordersCount'] }, 100] }, 0]
+            { $multiply: [{ $divide: ['$cancelledCount', '$ordersCount'] }, 100] }, 0]
           },
         }
       },
@@ -289,7 +289,7 @@ export const getFullAdminAnalytics = async (req, res) => {
         $group: {
           _id: '$items.color.name',
           ordersCount: { $sum: 1 },
-          qtySold:     { $sum: '$items.quantity' },
+          qtySold: { $sum: '$items.quantity' },
           cancelledCount: {
             $sum: { $cond: [{ $eq: ['$deliveryStatus', 'cancelled'] }, 1, 0] }
           },
@@ -303,7 +303,7 @@ export const getFullAdminAnalytics = async (req, res) => {
           cancelledCount: 1,
           cancelRate: {
             $cond: [{ $gt: ['$ordersCount', 0] },
-              { $multiply: [{ $divide: ['$cancelledCount', '$ordersCount'] }, 100] }, 0]
+            { $multiply: [{ $divide: ['$cancelledCount', '$ordersCount'] }, 100] }, 0]
           },
         }
       },
@@ -329,11 +329,11 @@ export const getFullAdminAnalytics = async (req, res) => {
       {
         $group: {
           _id: '$gov',
-          ordersCount:  { $sum: 1 },
-          revenue:      { $sum: '$total' },
-          avgOrder:     { $avg: '$total' },
-          delivered:    { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'delivered'] }, 1, 0] } },
-          cancelled:    { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'cancelled'] }, 1, 0] } },
+          ordersCount: { $sum: 1 },
+          revenue: { $sum: '$total' },
+          avgOrder: { $avg: '$total' },
+          delivered: { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'delivered'] }, 1, 0] } },
+          cancelled: { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'cancelled'] }, 1, 0] } },
           uniqueBuyers: { $addToSet: '$buyer' },
         }
       },
@@ -348,11 +348,11 @@ export const getFullAdminAnalytics = async (req, res) => {
           customerCount: { $size: '$uniqueBuyers' },
           completionRate: {
             $cond: [{ $gt: ['$ordersCount', 0] },
-              { $multiply: [{ $divide: ['$delivered', '$ordersCount'] }, 100] }, 0]
+            { $multiply: [{ $divide: ['$delivered', '$ordersCount'] }, 100] }, 0]
           },
           rejectionRate: {
             $cond: [{ $gt: ['$ordersCount', 0] },
-              { $multiply: [{ $divide: ['$cancelled', '$ordersCount'] }, 100] }, 0]
+            { $multiply: [{ $divide: ['$cancelled', '$ordersCount'] }, 100] }, 0]
           },
         }
       },
@@ -378,11 +378,11 @@ export const getFullAdminAnalytics = async (req, res) => {
       {
         $group: {
           _id: '$buyer',
-          ordersCount:  { $sum: 1 },
-          totalSpent:   { $sum: '$total' },
-          lastOrder:    { $max: '$createdAt' },
-          avgOrder:     { $avg: '$total' },
-          isGuest:      { $first: '$isGuest' },
+          ordersCount: { $sum: 1 },
+          totalSpent: { $sum: '$total' },
+          lastOrder: { $max: '$createdAt' },
+          avgOrder: { $avg: '$total' },
+          isGuest: { $first: '$isGuest' },
         }
       },
       { $match: { _id: { $ne: null } } },
@@ -394,7 +394,7 @@ export const getFullAdminAnalytics = async (req, res) => {
           as: 'userInfo'
         }
       },
-      { $unwind: { path: '$userInfo', preserveNullAndEmpty: true } },
+      { $unwind: { path: '$userInfo', preserveNullAndEmptyArrays: true } },
       {
         $project: {
           _id: 1,
@@ -430,7 +430,7 @@ export const getFullAdminAnalytics = async (req, res) => {
           as: 'productDoc'
         }
       },
-      { $unwind: { path: '$productDoc', preserveNullAndEmpty: true } },
+      { $unwind: { path: '$productDoc', preserveNullAndEmptyArrays: true } },
       {
         $lookup: {
           from: 'users',
@@ -439,7 +439,7 @@ export const getFullAdminAnalytics = async (req, res) => {
           as: 'buyerDoc'
         }
       },
-      { $unwind: { path: '$buyerDoc', preserveNullAndEmpty: true } },
+      { $unwind: { path: '$buyerDoc', preserveNullAndEmptyArrays: true } },
       {
         $project: {
           orderNumber: 1,
@@ -494,11 +494,11 @@ export const getFullAdminAnalytics = async (req, res) => {
         $group: {
           _id: null,
           totalShippingCost: { $sum: { $ifNull: ['$shippingFee', 0] } },
-          avgShipping:       { $avg: { $ifNull: ['$shippingFee', 0] } },
-          shippedOrders:     { $sum: { $cond: [{ $in: ['$deliveryStatus', ['shipped', 'delivered']] }, 1, 0] } },
-          deliveredOrders:   { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'delivered'] }, 1, 0] } },
-          cancelledOrders:   { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'cancelled'] }, 1, 0] } },
-          totalOrders:       { $sum: 1 },
+          avgShipping: { $avg: { $ifNull: ['$shippingFee', 0] } },
+          shippedOrders: { $sum: { $cond: [{ $in: ['$deliveryStatus', ['shipped', 'delivered']] }, 1, 0] } },
+          deliveredOrders: { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'delivered'] }, 1, 0] } },
+          cancelledOrders: { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'cancelled'] }, 1, 0] } },
+          totalOrders: { $sum: 1 },
           deliveredWithTime: {
             $push: {
               $cond: [
@@ -521,7 +521,7 @@ export const getFullAdminAnalytics = async (req, res) => {
           totalOrders: 1,
           rejectionRate: {
             $cond: [{ $gt: ['$totalOrders', 0] },
-              { $multiply: [{ $divide: ['$cancelledOrders', '$totalOrders'] }, 100] }, 0]
+            { $multiply: [{ $divide: ['$cancelledOrders', '$totalOrders'] }, 100] }, 0]
           },
           avgDeliveryDays: { $avg: '$deliveredWithTime' }
         }
@@ -562,33 +562,33 @@ export const getFullAdminAnalytics = async (req, res) => {
 
     // ── Build KPI deltas ──────────────────────────────────────────────────────
     const kpi = {
-      totalOrders:      { value: curr.totalOrders      || 0, delta: pctChange(curr.totalOrders || 0, prev.totalOrders || 0) },
-      delivered:        { value: curr.delivered        || 0, delta: pctChange(curr.delivered || 0, prev.delivered || 0) },
-      pending:          { value: curr.pending          || 0, delta: pctChange(curr.pending || 0, prev.pending || 0) },
-      shipped:          { value: curr.shipped          || 0, delta: pctChange(curr.shipped || 0, prev.shipped || 0) },
-      cancelled:        { value: curr.cancelled        || 0, delta: pctChange(curr.cancelled || 0, prev.cancelled || 0) },
-      totalRevenue:     { value: curr.totalRevenue     || 0, delta: pctChange(curr.totalRevenue || 0, prev.totalRevenue || 0) },
-      totalDiscount:    { value: curr.totalDiscount    || 0, delta: pctChange(curr.totalDiscount || 0, prev.totalDiscount || 0) },
-      totalShipping:    { value: curr.totalShipping    || 0, delta: pctChange(curr.totalShipping || 0, prev.totalShipping || 0) },
-      netRevenue:       { value: curr.netRevenue       || 0, delta: pctChange(curr.netRevenue || 0, prev.netRevenue || 0) },
-      avgOrderValue:    { value: Math.round((curr.avgOrderValue || 0) * 100) / 100, delta: pctChange(curr.avgOrderValue || 0, prev.avgOrderValue || 0) },
-      uniqueCustomers:  { value: curr.uniqueBuyerCount || 0, delta: pctChange(curr.uniqueBuyerCount || 0, prev.uniqueBuyerCount || 0) },
-      completionRate:   { value: Math.round((curr.completionRate || 0) * 10) / 10, delta: pctChange(curr.completionRate || 0, prev.completionRate || 0) },
+      totalOrders: { value: curr.totalOrders || 0, delta: pctChange(curr.totalOrders || 0, prev.totalOrders || 0) },
+      delivered: { value: curr.delivered || 0, delta: pctChange(curr.delivered || 0, prev.delivered || 0) },
+      pending: { value: curr.pending || 0, delta: pctChange(curr.pending || 0, prev.pending || 0) },
+      shipped: { value: curr.shipped || 0, delta: pctChange(curr.shipped || 0, prev.shipped || 0) },
+      cancelled: { value: curr.cancelled || 0, delta: pctChange(curr.cancelled || 0, prev.cancelled || 0) },
+      totalRevenue: { value: curr.totalRevenue || 0, delta: pctChange(curr.totalRevenue || 0, prev.totalRevenue || 0) },
+      totalDiscount: { value: curr.totalDiscount || 0, delta: pctChange(curr.totalDiscount || 0, prev.totalDiscount || 0) },
+      totalShipping: { value: curr.totalShipping || 0, delta: pctChange(curr.totalShipping || 0, prev.totalShipping || 0) },
+      netRevenue: { value: curr.netRevenue || 0, delta: pctChange(curr.netRevenue || 0, prev.netRevenue || 0) },
+      avgOrderValue: { value: Math.round((curr.avgOrderValue || 0) * 100) / 100, delta: pctChange(curr.avgOrderValue || 0, prev.avgOrderValue || 0) },
+      uniqueCustomers: { value: curr.uniqueBuyerCount || 0, delta: pctChange(curr.uniqueBuyerCount || 0, prev.uniqueBuyerCount || 0) },
+      completionRate: { value: Math.round((curr.completionRate || 0) * 10) / 10, delta: pctChange(curr.completionRate || 0, prev.completionRate || 0) },
       cancellationRate: { value: Math.round((curr.cancellationRate || 0) * 10) / 10, delta: pctChange(curr.cancellationRate || 0, prev.cancellationRate || 0) },
     };
 
     // ── Customer repeat analysis ──────────────────────────────────────────────
     const repeatCustomers = topCustomers.filter(c => c.ordersCount > 1).length;
-    const newCustomers    = topCustomers.filter(c => c.ordersCount === 1).length;
+    const newCustomers = topCustomers.filter(c => c.ordersCount === 1).length;
 
     // ── Alerts: products needing attention ────────────────────────────────────
-    const highCancelRate  = productPerf.filter(p => p.cancelRate > 30 && p.ordersCount >= 3);
-    const topSellers      = [...productPerf].sort((a, b) => b.qtySold - a.qtySold).slice(0, 5);
-    const lowSellers      = productPerf.filter(p => p.ordersCount <= 2 && productPerf.length > 5);
-    const topSizes        = sizeAnalysis.slice(0, 5);
-    const topColors       = colorAnalysis.slice(0, 5);
-    const topGovs         = [...governorateAnalysis].sort((a, b) => b.revenue - a.revenue).slice(0, 3);
-    const highRejectGovs  = [...governorateAnalysis].sort((a, b) => b.rejectionRate - a.rejectionRate).filter(g => g.ordersCount >= 2).slice(0, 3);
+    const highCancelRate = productPerf.filter(p => p.cancelRate > 30 && p.ordersCount >= 3);
+    const topSellers = [...productPerf].sort((a, b) => b.qtySold - a.qtySold).slice(0, 5);
+    const lowSellers = productPerf.filter(p => p.ordersCount <= 2 && productPerf.length > 5);
+    const topSizes = sizeAnalysis.slice(0, 5);
+    const topColors = colorAnalysis.slice(0, 5);
+    const topGovs = [...governorateAnalysis].sort((a, b) => b.revenue - a.revenue).slice(0, 3);
+    const highRejectGovs = [...governorateAnalysis].sort((a, b) => b.rejectionRate - a.rejectionRate).filter(g => g.ordersCount >= 2).slice(0, 3);
 
     return res.json({
       success: true,
@@ -596,8 +596,8 @@ export const getFullAdminAnalytics = async (req, res) => {
         period: { current: currRange, previous: prevRange },
         kpi,
         customerSummary: {
-          total:    kpi.uniqueCustomers.value,
-          repeat:   repeatCustomers,
+          total: kpi.uniqueCustomers.value,
+          repeat: repeatCustomers,
           newCount: newCustomers,
           avgOrdersPerCustomer: kpi.uniqueCustomers.value > 0
             ? Math.round((kpi.totalOrders.value / kpi.uniqueCustomers.value) * 10) / 10

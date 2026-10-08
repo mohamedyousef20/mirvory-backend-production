@@ -10,13 +10,13 @@ const guestOrderSchema = new mongoose.Schema({
     index: true,
   },
 
-  // Encrypted guest contact info
-  guestEmail: {
-    type: String,
-    required: true,
-    trim: true,
-    lowercase: true,
-  },
+  // // Encrypted guest contact info
+  // guestEmail: {
+  //   type: String,
+  //   required: true,
+  //   trim: true,
+  //   lowercase: true,
+  // },
   guestPhone: {
     type: String,
     required: true,
