@@ -14,6 +14,7 @@ const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 // 📦 PRODUCT CRUD & MANAGEMENT
 // ==========================================
 export const createProduct = async (req, res, next) => {
+  console.log('>>start')
   try {
     const productData = req.body.data || req.body;
 
@@ -93,12 +94,29 @@ export const createProduct = async (req, res, next) => {
     }
 
     const sellerPercentage = discountedPrice * multiplier;
+    const videoUrl =
+      typeof productData.videoUrl === 'string'
+        ? productData.videoUrl.trim()
+        : '';
+
+    if (videoUrl) {
+      try {
+        const parsedUrl = new URL(videoUrl);
+
+        if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+          throw new Error('Invalid protocol');
+        }
+      } catch {
+        throw new createError('رابط الفيديو غير صالح', 400);
+      }
+    }
 
     const product = await Product.create({
       seller: req.user._id,
       title: productData.title,
       description: productData.description,
       images: productData.images,
+      videoUrl,
       sizes,
       colors,
       price,
@@ -108,9 +126,12 @@ export const createProduct = async (req, res, next) => {
       status: 'pending',
       isApproved: false,
       sellerPercentage,
-      isFeatured: productData.isFeatured === 'true' || productData.isFeatured === true,
+      isFeatured:
+        productData.isFeatured === 'true' ||
+        productData.isFeatured === true,
       quantity: parseInt(productData.quantity) || 0
     });
+
 
     await product.populate('category', 'name nameEn');
     await product.populate('seller', 'firstName lastName email');
@@ -142,7 +163,7 @@ export const createProduct = async (req, res, next) => {
 
 export const updateProduct = async (req, res, next) => {
   try {
-    const productId = req.params.id 
+    const productId = req.params.id
     if (!isValidObjectId(productId)) throw new createError("معرف المنتج غير صالح", 400);
 
     const product = await Product.findById(productId);
@@ -192,7 +213,7 @@ export const updateProduct = async (req, res, next) => {
           const fileName = urlParts[urlParts.length - 1];
           const publicId = fileName.split('.')[0];
           const fullPublicId = `mirvory/${publicId}`;
-          
+
           await cloudinary.uploader.destroy(fullPublicId);
           console.log(`Deleted image from Cloudinary: ${fullPublicId}`);
         } catch (error) {
@@ -230,7 +251,7 @@ export const updateProduct = async (req, res, next) => {
     if (parsedUpdates.colors !== undefined) {
       try {
         let colors = typeof parsedUpdates.colors === 'string' ? JSON.parse(parsedUpdates.colors) : parsedUpdates.colors;
-        
+
         // Handle color image deletions
         if (parsedUpdates.deletedColorImages && Array.isArray(parsedUpdates.deletedColorImages)) {
           for (const colorImageUrl of parsedUpdates.deletedColorImages) {
@@ -239,7 +260,7 @@ export const updateProduct = async (req, res, next) => {
               const fileName = urlParts[urlParts.length - 1];
               const publicId = fileName.split('.')[0];
               const fullPublicId = `mirvory/${publicId}`;
-              
+
               await cloudinary.uploader.destroy(fullPublicId);
               console.log(`Deleted color image from Cloudinary: ${fullPublicId}`);
             } catch (error) {
@@ -535,7 +556,7 @@ export const getProductById = async (req, res, next) => {
 
     const product = await Product.findById(productId)
       .populate('seller', 'firstName lastName email')
-      .populate('category', '_id name nameEn description descriptionEn').lean();
+      .populate('category', '_id name nameEn description descriptionEn videoUrl').lean();
 
     if (!product || product.status === 'deleted') throw new createError("المنتج غير موجود", 404);
     res.status(200).json({ success: true, product });
