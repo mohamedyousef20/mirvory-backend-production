@@ -1,24 +1,56 @@
 import mongoose from 'mongoose';
 
+// v5: every size (and its stock) belongs to exactly one color.
+// Stock key = Product + Color(value) + Size.
+const colorSizeSchema = new mongoose.Schema({
+  size: { type: String, required: true, trim: true, maxlength: 20 },
+  quantity: { type: Number, required: true, default: 0, min: 0, validate: { validator: Number.isInteger, message: 'quantity must be an integer' } },
+}, { _id: false });
+
+const colorSchema = new mongoose.Schema({
+  name: { type: String, required: true, trim: true },
+  value: { type: String, required: true, trim: true },   // HEX, unique inside a product
+  image: { type: String, required: true },               // this color's own image
+  available: { type: Boolean, default: true },
+  sizes: {
+    type: [colorSizeSchema],
+    default: [],
+    validate: {
+      validator: (sizes) => new Set(sizes.map((s) => String(s.size).trim().toUpperCase())).size === sizes.length,
+      message: 'Duplicate size inside the same color',
+    },
+  },
+});
+
 const productSchema = new mongoose.Schema({
   seller: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   title: { type: String, required: true },
   description: { type: String, required: true },
-  images: [{ type: String }], sizes: [{ type: String }],
+  // v5: the global `images[]` and `sizes[]` fields were removed. Images and sizes live inside `colors[]`.
   videoUrl: { type: String, default: '', trim: true },
-  colors: [{ name: { type: String, required: true }, image: { type: String, required: true }, value: { type: String, required: true }, available: { type: Boolean, default: true } }],
+  colors: {
+    type: [colorSchema],
+    default: [],
+    validate: {
+      validator: (colors) => new Set(colors.map((c) => String(c.value).trim().toLowerCase())).size === colors.length,
+      message: 'Duplicate color value inside the same product',
+    },
+  },
   price: { type: Number, required: true },
   discountPercentage: { type: Number, default: 0, min: 0, max: 100 },
   discountedPrice: { type: Number, default: function () { return this.price; } },
   status: { type: String, enum: ['available', 'pending', 'deleted'], default: 'available' },
   sellerPercentage: { type: Number, default: 0 },
   rejectionReason: { type: String, default: null },
+  // Derived total = sum of all sizes of all available colors. Never trusted from the client.
   quantity: { type: Number, default: 0, min: 0 },
   sold: { type: Number, default: 0 },
   isApproved: { type: Boolean, default: false },
   category: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
   isFeatured: { type: Boolean, default: false },
   isTrusted: { type: Boolean, default: false },
+  // Set by the v5 migration when the per-color/size stock was estimated from the old single number
+  needsStockReview: { type: Boolean, default: false },
   brand: { type: String, default: '' },
   tags: [{ type: String }],
   ratings: {
@@ -31,6 +63,12 @@ const productSchema = new mongoose.Schema({
 productSchema.pre('save', function (next) {
   if (this.isModified('price') || this.isModified('discountPercentage')) {
     this.discountedPrice = this.price - (this.price * (this.discountPercentage / 100));
+  }
+  // Keep the denormalized total in sync whenever the colors/sizes are edited
+  if (this.isNew || this.isModified('colors')) {
+    this.quantity = (this.colors || [])
+      .filter((c) => c.available !== false)
+      .reduce((sum, c) => sum + (c.sizes || []).reduce((s, x) => s + (x.quantity || 0), 0), 0);
   }
   next();
 });

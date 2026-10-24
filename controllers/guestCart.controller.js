@@ -6,6 +6,7 @@ import mongoose from 'mongoose';
 import Product from '../models/product.model.js';
 import ShippingSettings from '../models/shippingSettings.model.js';
 import createError from '../utils/error.js';
+import { findColor, findSizeEntry, getPrimaryImage } from '../utils/inventory.js';
 
 /**
  * POST /api/guest-cart/validate
@@ -34,7 +35,7 @@ export const validateGuestCart = async (req, res, next) => {
     });
 
     const products = await Product.find({ _id: { $in: productIds } })
-      .select('_id title titleEn images price discountedPrice quantity status isApproved')
+      .select('_id title titleEn colors price discountedPrice quantity status isApproved')
       .lean();
 
     const productMap = Object.fromEntries(products.map((p) => [p._id.toString(), p]));
@@ -61,25 +62,38 @@ export const validateGuestCart = async (req, res, next) => {
 
       const isAvailable = product.status === 'available' && product.isApproved;
       const effectivePrice = product.discountedPrice ?? product.price;
-      const availableQty = product.quantity;
+
+      // v5: stock, name and image belong to the selected COLOR + SIZE
+      const color = item.color ? findColor(product, item.color) : null;
+      const sizeEntry = color && item.size ? findSizeEntry(color, item.size) : null;
+      const selectionValid = Boolean(color && color.available !== false && sizeEntry);
+      const availableQty = selectionValid ? sizeEntry.quantity : 0;
       const requestedQty = Math.min(item.quantity, availableQty);
 
-      if (isAvailable && requestedQty > 0) {
+      if (isAvailable && selectionValid && requestedQty > 0) {
         subtotal += effectivePrice * requestedQty;
       }
+
+      let reason = null;
+      if (!isAvailable) reason = 'المنتج غير متاح';
+      else if (!color || !item.size) reason = 'اختر اللون والمقاس';
+      else if (!selectionValid) reason = 'اللون أو المقاس لم يعد متاحاً';
+      else if (availableQty === 0) reason = 'نفد المخزون';
 
       return {
         productId: item.productId,
         quantity: item.quantity,
-        adjustedQuantity: isAvailable ? requestedQty : 0,
+        adjustedQuantity: isAvailable && selectionValid ? requestedQty : 0,
         size: item.size || null,
         color: item.color || null,
-        available: isAvailable,
+        colorName: color?.name || null,
+        available: isAvailable && selectionValid,
         inStock: availableQty > 0,
-        reason: !isAvailable ? 'المنتج غير متاح' : availableQty === 0 ? 'نفد المخزون' : null,
+        reason,
         title: product.title,
         titleEn: product.titleEn || product.title,
-        image: Array.isArray(product.images) && product.images.length > 0 ? product.images[0] : null,
+        // The image of the selected color (falls back to the first color only if none is selected yet)
+        image: color?.image || getPrimaryImage(product),
         price: effectivePrice,
         maxQuantity: availableQty,
       };

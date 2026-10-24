@@ -33,7 +33,17 @@ const orderSchema = new mongoose.Schema({
       required: true
     },
 
+    // Product title at the time of purchase
+    title: {
+      type: String
+    },
+
+    // Snapshot of the selected color (id + name + hex value). `value` identifies the color's stock.
     color: {
+      id: {
+        type: mongoose.Schema.Types.ObjectId,
+        default: null
+      },
       name: {
         type: String,
         default: null
@@ -48,7 +58,7 @@ const orderSchema = new mongoose.Schema({
       type: String
     },
 
-    // Product image snapshot at the time of purchase
+    // Image of the SELECTED COLOR at the time of purchase
     image: {
       type: String
     },
@@ -74,6 +84,8 @@ const orderSchema = new mongoose.Schema({
   deliveryStatus: { type: String, enum: ["pending", "shipped", "delivered", "cancelled"], default: "pending" },
   deliveredAt: Date, payoutProcessed: { type: Boolean, default: false },
   isPrepared: { type: Boolean, default: false },
+  // Set once the stock of a cancelled order was returned to its color/size (prevents double restock)
+  stockRestored: { type: Boolean, default: false },
   secretCode: { type: String, unique: true, required: true },
 }, { timestamps: true });
 

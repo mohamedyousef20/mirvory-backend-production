@@ -11,7 +11,7 @@ const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 // @access  Private
 export const getWishlist = asyncHandler(async (req, res, next) => {
   let wishlist = await Wishlist.findOne({ user: req.user._id })
-    .populate({ path: 'products.product', select: 'title titleEn price images quantity' });
+    .populate({ path: 'products.product', select: 'title titleEn price discountedPrice colors quantity' });
 
   if (!wishlist) {
     wishlist = await Wishlist.create({
