@@ -27,7 +27,7 @@ const wishlistSchema = new mongoose.Schema({
 wishlistSchema.pre(/^find/, function (next) {
   this.populate({
     path: 'products.product',
-    select: 'title description images price discountedPrice discountPercentage category ratings status'
+    select: 'title description colors price discountedPrice discountPercentage category ratings status'
   });
   next();
 });

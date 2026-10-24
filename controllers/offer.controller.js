@@ -109,7 +109,7 @@ export const getOffers = async (req, res, next) => {
     }
 
     const offers = await Offer.find(filter)
-      .populate('applicableProducts', 'title price images')
+      .populate('applicableProducts', 'title price colors')
       .populate('applicableCategories', 'name')
       .populate('createdBy', 'firstName lastName')
       .sort(withStableTiebreaker({ createdAt: -1 }))
@@ -137,7 +137,7 @@ export const getActiveOffers = async (req, res, next) => {
       startDate: { $lte: now },
       endDate: { $gte: now }
     })
-      .populate('applicableProducts', 'title price images discountPercentage')
+      .populate('applicableProducts', 'title price colors discountPercentage')
       .populate('applicableCategories', 'name')
       .sort({ createdAt: -1 })
       .lean();
@@ -155,7 +155,7 @@ export const getOfferById = async (req, res, next) => {
     if (!isValidObjectId(id)) throw new createError("المعرف غير صالح", 400);
 
     const offer = await Offer.findById(id)
-      .populate('applicableProducts', 'title price images')
+      .populate('applicableProducts', 'title price colors')
       .populate('applicableCategories', 'name')
       .populate('createdBy', 'firstName lastName')
       .populate('updatedBy', 'firstName lastName');

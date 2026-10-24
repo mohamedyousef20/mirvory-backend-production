@@ -5,8 +5,8 @@ import { createNotifications } from '../utils/notification.js';
 import createError from '../utils/error.js';
 import { formatPaginationResponse } from '../middlewares/pagination.js';
 import { withStableTiebreaker } from '../utils/pagination.js';
-import { uploadImage, removeImage } from '../services/imageUploadService.js';
 import cloudinary from '../config/cloudinary.js';
+import { normalizeColors, toClientProduct } from '../utils/inventory.js';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
@@ -23,59 +23,8 @@ export const createProduct = async (req, res, next) => {
     }
     if (!isValidObjectId(productData.category)) throw new createError("القسم المحدد غير صالح", 400);
 
-    if (!productData.images || !Array.isArray(productData.images) || productData.images.length === 0) {
-      throw new createError("يجب إرفاق صورة واحدة على الأقل للمنتج", 400);
-    }
-
-    let sizes = [];
-    if (productData.sizes) {
-      try {
-        sizes = typeof productData.sizes === 'string' ? JSON.parse(productData.sizes) : productData.sizes;
-        if (!Array.isArray(sizes)) sizes = [sizes];
-      } catch (e) { sizes = [productData.sizes]; }
-    }
-
-    let colors = [];
-
-    if (productData.colors) {
-      try {
-        colors =
-          typeof productData.colors === 'string'
-            ? JSON.parse(productData.colors)
-            : productData.colors;
-
-        if (!Array.isArray(colors)) {
-          colors = [colors];
-        }
-      } catch (e) {
-        colors = [productData.colors];
-      }
-
-      if (colors.length > 0) {
-        const isValidColors = colors.every(
-          c =>
-            c &&
-            typeof c === 'object' &&
-            c.name &&
-            c.value &&
-            c.image
-        );
-
-        if (!isValidColors) {
-          throw new createError(
-            "كل لون يجب أن يحتوي على الاسم والقيمة وصورة اللون",
-            400
-          );
-        }
-
-        colors = colors.map(c => ({
-          name: c.name,
-          value: c.value,
-          image: c.image,
-          available: c.available !== false
-        }));
-      }
-    }
+    // v5: images, sizes and stock live inside each color. Global images[]/sizes[] are not accepted anymore.
+    const colors = normalizeColors(productData.colors);
 
     const price = parseFloat(productData.price);
     const discountPercentage = parseFloat(productData.discountPercentage) || 0;
@@ -115,9 +64,7 @@ export const createProduct = async (req, res, next) => {
       seller: req.user._id,
       title: productData.title,
       description: productData.description,
-      images: productData.images,
       videoUrl,
-      sizes,
       colors,
       price,
       discountPercentage,
@@ -129,7 +76,7 @@ export const createProduct = async (req, res, next) => {
       isFeatured:
         productData.isFeatured === 'true' ||
         productData.isFeatured === true,
-      quantity: parseInt(productData.quantity) || 0
+      // `quantity` is derived from colors[].sizes[].quantity by the model's pre-save hook
     });
 
 
@@ -154,7 +101,7 @@ export const createProduct = async (req, res, next) => {
       } catch (err) { console.error("Notification Error:", err); }
     })();
 
-    res.status(201).json({ success: true, message: 'تم إضافة المنتج وهو قيد المراجعة', product });
+    res.status(201).json({ success: true, message: 'تم إضافة المنتج وهو قيد المراجعة', product: toClientProduct(product) });
   } catch (error) {
     if (error.code === 11000) return next(new createError("يوجد منتج مشابه بالفعل", 400));
     next(error);
@@ -175,111 +122,39 @@ export const updateProduct = async (req, res, next) => {
       throw new createError("غير مصرح لك بتحديث هذا المنتج", 403);
     }
 
-    // Handle FormData with files
-    const hasFiles = req.files && req.files.length > 0;
     const updates = req.body;
 
-    // Parse JSON fields if they come as strings
-    let parsedUpdates = { ...updates };
-    ['sizes', 'colors', 'images', 'deletedImages', 'deletedColorImages'].forEach(field => {
+    // Parse JSON fields if they come as strings (FormData)
+    const parsedUpdates = { ...updates };
+    ['colors', 'deletedColorImages'].forEach(field => {
       if (parsedUpdates[field] && typeof parsedUpdates[field] === 'string') {
-        try {
-          parsedUpdates[field] = JSON.parse(parsedUpdates[field]);
-        } catch (e) {
-          // Keep as is if parsing fails
-        }
+        try { parsedUpdates[field] = JSON.parse(parsedUpdates[field]); } catch (e) { /* validated below */ }
       }
     });
 
-    // Extract public_ids from old images for deletion
-    const oldImages = product.images || [];
-    const deletedImages = parsedUpdates.deletedImages || [];
-    const imagesToKeep = parsedUpdates.images || [];
-
-    // Delete old images from Cloudinary that are not in the keep list
-    const imagesToDelete = oldImages.filter(img => {
-      // Extract public_id from Cloudinary URL
-      const publicId = img.split('/').pop().split('.')[0];
-      return deletedImages.includes(img) || (!imagesToKeep.includes(img) && !deletedImages.includes(img));
-    });
-
-    // Delete images from Cloudinary
-    if (imagesToDelete.length > 0) {
-      for (const imageUrl of imagesToDelete) {
-        try {
-          // Extract public_id from Cloudinary URL
-          // URL format: https://res.cloudinary.com/cloud_name/image/upload/v1234567890/mirvory/public_id.jpg
-          const urlParts = imageUrl.split('/');
-          const fileName = urlParts[urlParts.length - 1];
-          const publicId = fileName.split('.')[0];
-          const fullPublicId = `mirvory/${publicId}`;
-
-          await cloudinary.uploader.destroy(fullPublicId);
-          console.log(`Deleted image from Cloudinary: ${fullPublicId}`);
-        } catch (error) {
-          console.error(`Failed to delete image ${imageUrl}:`, error);
-          // Continue even if deletion fails
-        }
-      }
-    }
-
-    // Upload new images if any
-    let newImageUrls = [];
-    if (hasFiles) {
-      for (const file of req.files) {
-        try {
-          const uploadResult = await uploadImage(file);
-          newImageUrls.push(uploadResult.url);
-        } catch (error) {
-          console.error('Failed to upload image:', error);
-          throw new createError('فشل في رفع الصور', 500);
-        }
-      }
-    }
-
-    // Combine kept images with new images
-    product.images = [...imagesToKeep, ...newImageUrls];
-
-    // Update sizes
-    if (parsedUpdates.sizes !== undefined) {
-      try {
-        product.sizes = typeof parsedUpdates.sizes === 'string' ? JSON.parse(parsedUpdates.sizes) : (Array.isArray(parsedUpdates.sizes) ? parsedUpdates.sizes : [parsedUpdates.sizes]);
-      } catch (e) { product.sizes = parsedUpdates.sizes; }
-    }
-
-    // Update colors
+    // v5: colors carry their own image + sizes + stock. Replacing `colors` replaces all of them,
+    // so the form must send every color it wants to keep (with its sizes).
     if (parsedUpdates.colors !== undefined) {
-      try {
-        let colors = typeof parsedUpdates.colors === 'string' ? JSON.parse(parsedUpdates.colors) : parsedUpdates.colors;
+      const newColors = normalizeColors(parsedUpdates.colors);
 
-        // Handle color image deletions
-        if (parsedUpdates.deletedColorImages && Array.isArray(parsedUpdates.deletedColorImages)) {
-          for (const colorImageUrl of parsedUpdates.deletedColorImages) {
-            try {
-              const urlParts = colorImageUrl.split('/');
-              const fileName = urlParts[urlParts.length - 1];
-              const publicId = fileName.split('.')[0];
-              const fullPublicId = `mirvory/${publicId}`;
+      // Delete from Cloudinary only the color images that are no longer used by any color
+      const stillUsed = new Set(newColors.map(c => c.image));
+      const orphaned = (product.colors || []).map(c => c.image).filter(img => img && !stillUsed.has(img));
+      const requestedDeletes = Array.isArray(parsedUpdates.deletedColorImages) ? parsedUpdates.deletedColorImages : [];
+      const toDelete = [...new Set([...orphaned, ...requestedDeletes.filter(img => !stillUsed.has(img))])];
 
-              await cloudinary.uploader.destroy(fullPublicId);
-              console.log(`Deleted color image from Cloudinary: ${fullPublicId}`);
-            } catch (error) {
-              console.error(`Failed to delete color image ${colorImageUrl}:`, error);
-            }
-          }
+      for (const imageUrl of toDelete) {
+        try {
+          const fileName = imageUrl.split('/').pop();
+          const publicId = fileName.split('.')[0];
+          await cloudinary.uploader.destroy(`mirvory/${publicId}`);
+        } catch (error) {
+          console.error(`Failed to delete color image ${imageUrl}:`, error);
         }
+      }
 
-        // Validate colors structure
-        if (Array.isArray(colors)) {
-          colors = colors.map(c => ({
-            name: c.name,
-            value: c.value,
-            image: c.image,
-            available: c.available !== false
-          }));
-        }
-        product.colors = colors;
-      } catch (e) { product.colors = parsedUpdates.colors; }
+      product.colors = newColors;
+      product.needsStockReview = false; // the seller/admin just entered real per-size stock
     }
 
     // Update price and discount
@@ -292,10 +167,10 @@ export const updateProduct = async (req, res, next) => {
     }
 
     // Update other fields
-    const allowedUpdates = ['title', 'description', 'quantity', 'category', 'isFeatured', 'sellerPercentage', 'brand', 'tags', 'isTrusted'];
+    const allowedUpdates = ['title', 'description', 'category', 'isFeatured', 'sellerPercentage', 'brand', 'tags', 'isTrusted'];
     allowedUpdates.forEach(key => {
       if (parsedUpdates[key] !== undefined) {
-        if (key === 'quantity' || key === 'sellerPercentage') product[key] = parseFloat(parsedUpdates[key]);
+        if (key === 'sellerPercentage') product[key] = parseFloat(parsedUpdates[key]);
         else if (key === 'isFeatured' || key === 'isTrusted') product[key] = (parsedUpdates[key] === 'true' || parsedUpdates[key] === true);
         else if (key === 'tags' && typeof parsedUpdates[key] === 'string') product[key] = parsedUpdates[key].split(',').map(t => t.trim());
         else product[key] = parsedUpdates[key];
@@ -331,7 +206,7 @@ export const updateProduct = async (req, res, next) => {
       })();
     }
 
-    res.status(200).json({ success: true, message: 'تم تحديث المنتج بنجاح', product: updatedProduct });
+    res.status(200).json({ success: true, message: 'تم تحديث المنتج بنجاح', product: toClientProduct(updatedProduct) });
   } catch (error) { next(error); }
 };
 
@@ -496,7 +371,7 @@ export const getProducts = async (req, res, next) => {
     const [total, products] = await Promise.all([
       Product.countDocuments(filter),
       Product.find(filter)
-        .select('title images sizes colors price discountedPrice discountPercentage ratings seller category status sold quantity')
+        .select('title colors price discountedPrice discountPercentage ratings seller category status sold quantity')
         .populate('seller', 'firstName lastName')
         .populate('category', 'name')
         .sort(sortObj)
@@ -505,7 +380,7 @@ export const getProducts = async (req, res, next) => {
         .lean(),
     ]);
 
-    res.status(200).json(formatPaginationResponse(products, total, req.pagination));
+    res.status(200).json(formatPaginationResponse(products.map(toClientProduct), total, req.pagination));
   } catch (error) { next(error); }
 };
 
@@ -526,7 +401,7 @@ export const getProductsForAdmin = async (req, res, next) => {
         .skip(skip).limit(limit).lean(),
     ]);
 
-    res.status(200).json(formatPaginationResponse(products, total, req.pagination));
+    res.status(200).json(formatPaginationResponse(products.map(toClientProduct), total, req.pagination));
   } catch (error) { next(error); }
 };
 
@@ -545,7 +420,7 @@ export const getSellerProducts = async (req, res, next) => {
         .skip(skip).limit(limit).lean(),
     ]);
 
-    res.status(200).json(formatPaginationResponse(products, total, req.pagination));
+    res.status(200).json(formatPaginationResponse(products.map(toClientProduct), total, req.pagination));
   } catch (error) { next(error); }
 };
 
@@ -559,7 +434,7 @@ export const getProductById = async (req, res, next) => {
       .populate('category', '_id name nameEn description descriptionEn videoUrl').lean();
 
     if (!product || product.status === 'deleted') throw new createError("المنتج غير موجود", 404);
-    res.status(200).json({ success: true, product });
+    res.status(200).json({ success: true, product: toClientProduct(product) });
   } catch (error) { next(error); }
 };
 
@@ -573,7 +448,7 @@ export const getFeaturedProducts = async (req, res, next) => {
       .limit(12)
       .lean();
 
-    res.status(200).json({ success: true, data: products });
+    res.status(200).json({ success: true, data: products.map(toClientProduct) });
   } catch (error) { next(error); }
 };
 
@@ -587,7 +462,7 @@ export const getNewArrivals = async (req, res, next) => {
       .limit(12)
       .lean();
 
-    res.status(200).json({ success: true, data: products });
+    res.status(200).json({ success: true, data: products.map(toClientProduct) });
   } catch (error) { next(error); }
 };
 
@@ -651,7 +526,7 @@ export const getProductsByCategory = async (req, res, next) => {
 
     res.status(200).json(
       formatPaginationResponse(
-        products,
+        products.map(toClientProduct),
         total,
         req.pagination
       )

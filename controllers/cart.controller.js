@@ -2,33 +2,57 @@ import Cart from '../models/cart.model.js';
 import Product from '../models/product.model.js';
 import asyncHandler from 'express-async-handler';
 import createError from '../utils/error.js';
+import { resolveSelection, findColor, findSizeEntry } from '../utils/inventory.js';
+
+// Attach, to every cart item, the stock that is available for ITS color + size
+// (so the UI can cap the quantity and show "sold out" correctly).
+const withItemStock = (cart) => {
+  const obj = typeof cart.toObject === 'function' ? cart.toObject() : cart;
+  obj.items = (obj.items || []).map((item) => {
+    const product = item.product && typeof item.product === 'object' ? item.product : null;
+    let availableStock = null;
+    if (product?.colors) {
+      const color = findColor(product, item.colors?.[0]);
+      const sizeEntry = color && color.available !== false ? findSizeEntry(color, item.sizes?.[0]) : null;
+      availableStock = sizeEntry ? sizeEntry.quantity : 0;
+    }
+    return { ...item, availableStock };
+  });
+  return obj;
+};
 
 export const getCart = asyncHandler(async (req, res, next) => {
   const cart = await Cart.findOne({ user: req.user._id })
-    .populate({ path: 'items.product', select: 'title titleEn images price seller quantity' });
+    .populate({ path: 'items.product', select: 'title titleEn colors price discountedPrice seller quantity status' });
 
   if (!cart) return res.status(404).json({ message: 'السلة غير موجودة' });
-  res.json(cart);
+  res.json(withItemStock(cart));
 });
 
 export const addToCart = asyncHandler(async (req, res, next) => {
   const { productId } = req.body;
-  let { quantity = 1, sizes, colors } = req.body;
+  let { quantity = 1, sizes, colors, size, color } = req.body;
 
   quantity = parseInt(quantity);
-  if (quantity <= 0) return next(new createError("الكمية يجب أن تكون أكبر من صفر", 400));
+  if (!quantity || quantity <= 0) return next(new createError("الكمية يجب أن تكون أكبر من صفر", 400));
 
-  sizes = Array.isArray(sizes) ? sizes : (sizes ? [sizes] : []);
-  colors = Array.isArray(colors) ? colors : (colors ? [colors] : []);
+  // The client may send one color/size (preferred) or the legacy per-unit arrays.
+  sizes = Array.isArray(sizes) ? sizes : (sizes ? [sizes] : (size ? [size] : []));
+  colors = Array.isArray(colors) ? colors : (colors ? [colors] : (color ? [color] : []));
+
+  if (!sizes.length || !colors.length) {
+    return next(new createError("اختر اللون والمقاس أولاً", 400));
+  }
+  // Every unit of one add-to-cart call belongs to the same color + size selection
+  const colorValue = colors[0];
+  const sizeValue = sizes[0];
+  if (colors.some(c => c !== colorValue) || sizes.some(s => s !== sizeValue)) {
+    return next(new createError("أضف كل لون ومقاس كعنصر منفصل", 400));
+  }
 
   const product = await Product.findById(productId).lean();
   if (!product) return next(new createError("المنتج غير موجود", 404));
-  if (!product.isApproved) {
-    return next(new createError("هذا المنتج غير متاح للشراء حالياً", 400));
-  }
-
-  // المنتج يجب أن يكون متاحًا
-  if (product.status !== "available") {
+  if (!product.isApproved || product.status !== "available") {
     return next(new createError("هذا المنتج غير متاح للشراء حالياً", 400));
   }
 
@@ -36,55 +60,41 @@ export const addToCart = asyncHandler(async (req, res, next) => {
   if (product.seller.toString() === req.user._id.toString()) {
     return next(new createError("لا يمكنك إضافة منتجاتك إلى سلة التسوق", 403));
   }
-  let cart = await Cart.findOneAndUpdate(
+
+  const cart = await Cart.findOneAndUpdate(
     { user: req.user._id },
     { $setOnInsert: { user: req.user._id, items: [] } },
     { upsert: true, new: true }
   );
 
-  const existingQty = cart.items.filter(i => i.product.toString() === productId).reduce((sum, i) => sum + i.quantity, 0);
-  if (existingQty + quantity > product.quantity) return next(new createError("الكمية المطلوبة تتجاوز المخزون", 400));
-  if (sizes.length && sizes.length !== quantity) return next(new createError("عدد المقاسات يجب أن يطابق الكمية", 400));
-  if (colors.length && colors.length !== quantity) return next(new createError("عدد الألوان يجب أن يطابق الكمية", 400));
+  // Same product + same color + same size = one cart line. A different color or size is a different line.
+  const existingItem = cart.items.find(item =>
+    item.product.toString() === productId &&
+    (item.sizes[0] || null) === sizeValue &&
+    (item.colors[0] || null) === colorValue
+  );
 
-  for (let i = 0; i < quantity; i++) {
-    const currentSize = sizes.length ? sizes[i] : null;
-    const currentColor = colors.length ? colors[i] : null;
+  const wantedQty = (existingItem?.quantity || 0) + quantity;
+  // Throws a clear message when the color/size does not exist, is inactive, or is short on stock
+  const { color: selectedColor } = resolveSelection(product, colorValue, sizeValue, wantedQty);
 
-    const selectedColor = currentColor
-      ? product.colors?.find(
-        color => color.value === currentColor
-      )
-      : null;
-
-    const selectedColorImage = selectedColor?.image || product.images?.[0] || null;
-
-    const existingItem = cart.items.find(item =>
-      item.product.toString() === productId &&
-      (item.sizes[0] || null) === currentSize &&
-      (item.colors[0] || null) === currentColor
-    );
-
-    if (existingItem) {
-      existingItem.quantity += 1;
-
-      // Keep the selected color image synchronized
-      if (selectedColorImage) {
-        existingItem.image = selectedColorImage;
-      }
-    } else {
-      cart.items.push({
-        product: productId,
-        quantity: 1,
-        price: product.price,
-        sizes: currentSize ? [currentSize] : [],
-        colors: currentColor ? [currentColor] : [],
-        image: selectedColorImage
-      });
-    }
+  if (existingItem) {
+    existingItem.quantity = wantedQty;
+    existingItem.image = selectedColor.image;
+    existingItem.colorName = selectedColor.name;
+  } else {
+    cart.items.push({
+      product: productId,
+      quantity,
+      price: product.price,
+      sizes: [sizeValue],
+      colors: [colorValue],
+      colorName: selectedColor.name,
+      image: selectedColor.image,
+    });
   }
 
-  if (typeof cart.updateTotal === 'function') await cart.updateTotal();
+  await cart.updateTotal();
   res.json(cart);
 });
 
@@ -92,7 +102,7 @@ export const updateCartItem = asyncHandler(async (req, res, next) => {
   const { itemId, quantity } = req.body;
   const parsedQty = parseInt(quantity);
 
-  if (parsedQty <= 0) return next(new createError("الكمية يجب أن تكون أكبر من صفر", 400));
+  if (!parsedQty || parsedQty <= 0) return next(new createError("الكمية يجب أن تكون أكبر من صفر", 400));
 
   const cart = await Cart.findOne({ user: req.user._id });
   if (!cart) return next(new createError("السلة غير موجودة", 404));
@@ -100,12 +110,14 @@ export const updateCartItem = asyncHandler(async (req, res, next) => {
   const item = cart.items.find(i => i._id.toString() === itemId);
   if (!item) return next(new createError("المنتج غير موجود في السلة", 404));
 
-  const product = await Product.findById(item.product).select('quantity').lean();
-  if (product && parsedQty > product.quantity) return next(new createError("الكمية تتجاوز المخزون المتاح", 400));
+  const product = await Product.findById(item.product).select('title colors status isApproved').lean();
+  if (!product || product.status !== 'available') return next(new createError("هذا المنتج لم يعد متاحاً", 400));
+
+  // Check the stock of THIS item's color + size only. Color/size are never changed here.
+  resolveSelection(product, item.colors[0], item.sizes[0], parsedQty);
 
   item.quantity = parsedQty;
-  if (typeof cart.updateTotal === 'function') await cart.updateTotal();
-  else await cart.save();
+  await cart.updateTotal();
 
   res.json(cart);
 });

@@ -123,7 +123,7 @@ export const getSellerTransactions = async (req, res) => {
 
     const [orders, total] = await Promise.all([
       Order.find({ 'items.seller': sellerId })
-        .populate('items.product', 'title images')
+        .populate('items.product', 'title colors')
         .sort(withStableTiebreaker({ createdAt: -1 }))
         .skip(skip)
         .limit(limit),

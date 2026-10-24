@@ -19,10 +19,16 @@ const cartItemSchema = new mongoose.Schema({
     type: String,
     required: true
   }],
+  // Selected color VALUE (hex). Stock is tracked per Product + color + size.
   colors: [{
     type: String,
     required: true
   }],
+  // Snapshot of the selected color's display name (the image below is that color's image)
+  colorName: {
+    type: String,
+    default: null
+  },
 
     image: {
     type: String,

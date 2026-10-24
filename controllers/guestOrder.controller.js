@@ -7,6 +7,7 @@ import GuestOrder from '../models/guestOrder.model.js';
 import ShippingSettings from '../models/shippingSettings.model.js';
 import createError from '../utils/error.js';
 import { createNotifications } from '../utils/notification.js';
+import { resolveSelection, reserveStock, returnStock } from '../utils/inventory.js';
 
 // ─────────────────────────────────────────────
 // Helpers
@@ -154,18 +155,20 @@ export const createGuestOrder = async (req, res, next) => {
       return new mongoose.Types.ObjectId(item.productId);
     });
 
-    // ── 5. Fetch products including colors + images ─────────────────
+    // ── 5. Fetch products including colors (images/sizes/stock live inside each color) ──
+    // The same product can appear on several lines (different color or size), so use unique ids.
+    const uniqueProductIds = [...new Set(productIds.map((id) => id.toString()))];
     const products = await Product.find({
-      _id: { $in: productIds },
+      _id: { $in: uniqueProductIds },
       status: "available",
       isApproved: true,
     })
       .select(
-        "_id price discountedPrice seller quantity images colors"
+        "_id title price discountedPrice seller quantity colors status"
       )
       .lean();
 
-    if (products.length !== items.length) {
+    if (products.length !== uniqueProductIds.length) {
       throw new createError(
         "بعض المنتجات غير متوفرة أو تم حذفها",
         404
@@ -179,124 +182,66 @@ export const createGuestOrder = async (req, res, next) => {
       ])
     );
 
-    // ── 6. Verify stock availability ────────────────────────────────
-    for (const item of items) {
-      const product =
-        productMap[item.productId.toString()];
-
+    // ── 6. Verify color + size + stock for every line ───────────────
+    // The same variant may appear on several lines, so check the SUM per variant.
+    const variantTotals = new Map();
+    const lines = items.map((item) => {
+      const product = productMap[item.productId.toString()];
       if (!product) {
-        throw new createError(
-          `المنتج غير موجود: ${item.productId}`,
-          404
-        );
+        throw new createError(`المنتج غير موجود: ${item.productId}`, 404);
       }
+      const k = `${product._id}|${String(item.color).toLowerCase()}|${String(item.size).toUpperCase()}`;
+      const total = (variantTotals.get(k) || 0) + item.quantity;
+      variantTotals.set(k, total);
+      const { color, sizeEntry } = resolveSelection(product, item.color, item.size, total);
+      return { item, product, color, size: sizeEntry.size };
+    });
 
-      if (product.quantity < item.quantity) {
-        throw new createError(
-          "الكمية المطلوبة غير متوفرة في المخزون",
-          400
-        );
-      }
-    }
-
-    // ── 7. Reserve stock ────────────────────────────────────────────
-    const bulkOps = items.map((item) => ({
-      updateOne: {
-        filter: {
-          _id: new mongoose.Types.ObjectId(item.productId),
-          quantity: { $gte: item.quantity },
-        },
-        update: {
-          $inc: {
-            quantity: -item.quantity,
-            sold: item.quantity,
-          },
-        },
-      },
+    // ── 7. Reserve stock atomically (Product + Color + Size, all-or-nothing) ──
+    const stockLines = lines.map(({ item, product, color, size }) => ({
+      productId: product._id,
+      colorValue: color.value,
+      size,
+      quantity: item.quantity,
     }));
+    await reserveStock(stockLines);
 
-    const bulkResult = await Product.bulkWrite(bulkOps);
-
-    if (bulkResult.modifiedCount !== items.length) {
-      // ── Partial failure: roll back decremented products ──────────────────
-      // productMap holds the pre-decrement quantities fetched from DB.
-      // Any product whose current quantity < original was actually decremented.
-      const rollbackOps = items.map((item) => {
-        const orig = productMap[item.productId.toString()];
-        return {
-          updateOne: {
-            filter: {
-              _id: new mongoose.Types.ObjectId(item.productId),
-              quantity: { $lt: orig.quantity }, // was decremented
-            },
-            update: { $inc: { quantity: item.quantity, sold: -item.quantity } },
-          },
-        };
-      });
-      try {
-        await Product.bulkWrite(rollbackOps);
-      } catch (rollbackErr) {
-        console.error('[CRITICAL] Guest order stock rollback failed:', rollbackErr);
-      }
-      throw new createError(
-        "بعض المنتجات نفذت من المخزون أثناء تأكيد الطلب",
-        400
-      );
-    }
+    // If anything fails before the order exists, the reserved stock is given back.
+    let order;
+    let guestRecord;
+    let orderItems;
+    let subtotal = 0;
+    let total;
+    let shippingFee;
+    try {
 
     // ── 8. Calculate totals + build order items ──────────────────────
-    let subtotal = 0;
-
-    const orderItems = items.map((item) => {
-      const product =
-        productMap[item.productId.toString()];
-
+    orderItems = lines.map(({ item, product, color, size }) => {
       const price = getEffectivePrice(product);
 
       subtotal += price * item.quantity;
 
-      // Find the exact selected color
-      const selectedColor = item.color
-        ? product.colors?.find(
-          (color) => color.value === item.color
-        )
-        : null;
-
-      // Get the image belonging to the selected color
-      const selectedColorImage =
-        selectedColor?.image ||
-        product.images?.[0] ||
-        null;
-
       return {
         product: product._id,
         seller: product.seller,
+        title: product.title,
         quantity: item.quantity,
         price,
-
-        size: item.size || undefined,
-
-        color: selectedColor
-          ? {
-            name: selectedColor.name,
-            value: selectedColor.value,
-          }
-          : item.color
-            ? {
-              name: item.color,
-              value: item.color,
-            }
-            : undefined,
-
-        // IMPORTANT:
-        // Save the selected color image in the order snapshot
-        image: selectedColorImage,
+        size,
+        // Snapshot of the exact selected color (id + name + hex)
+        color: {
+          id: color._id || null,
+          name: color.name,
+          value: color.value,
+        },
+        // IMPORTANT: the image of the SELECTED color, taken from the product (not from the client)
+        image: color.image,
       };
     });
 
     // Get shipping settings and calculate shipping fee
     const shippingSettings = await ShippingSettings.getSettings();
-    let shippingFee = shippingSettings.shippingFee;
+    shippingFee = shippingSettings.shippingFee;
 
     // Free shipping based on minimum order
     if (shippingSettings.freeShippingEnabled && subtotal >= shippingSettings.freeShippingMinimum) {
@@ -318,7 +263,7 @@ export const createGuestOrder = async (req, res, next) => {
       }
     }
 
-    const total = Math.max(
+    total = Math.max(
       0,
       subtotal + shippingFee
     );
@@ -344,7 +289,7 @@ export const createGuestOrder = async (req, res, next) => {
     const secretCode = await generateSecretCode("G");
 
     // ── 10. Create Order ─────────────────────────────────────────────
-    const order = await Order.create({
+    order = await Order.create({
       buyer: guestSentinelId,
 
       isGuest: true,
@@ -381,13 +326,21 @@ export const createGuestOrder = async (req, res, next) => {
     });
 
     // ── 11. Create GuestOrder record ─────────────────────────────────
-    const guestRecord = await GuestOrder.create({
+    guestRecord = await GuestOrder.create({
       guestEmail: guestEmail.toLowerCase().trim(),
       guestPhone: guestPhone.trim(),
       guestName: guestName.trim(),
       order: order._id,
       ipHash,
     });
+    } catch (orderErr) {
+      // The order could not be completed: return the reserved stock (and drop a half-created order).
+      if (order?._id && !guestRecord) { try { await Order.findByIdAndDelete(order._id); } catch (_) { /* ignore */ } }
+      for (const line of stockLines) {
+        try { await returnStock(line); } catch (e) { console.error('[CRITICAL] Guest stock return failed:', line, e); }
+      }
+      throw orderErr;
+    }
 
     // ── 12. Notify sellers ──────────────────────────────────────────
     setImmediate(async () => {
@@ -459,7 +412,7 @@ export const trackGuestOrder = async (req, res, next) => {
         select: 'orderNumber deliveryStatus paymentStatus total deliveryMethod deliveryInfo.fullName deliveryInfo.address items createdAt',
         populate: {
           path: 'items.product',
-          select: 'title images',
+          select: 'title',
         },
       })
       .lean();

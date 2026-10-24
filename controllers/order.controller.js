@@ -9,6 +9,7 @@ import { createNotifications } from '../utils/notification.js';
 import { formatPaginationResponse } from '../middlewares/pagination.js';
 import { withStableTiebreaker } from '../utils/pagination.js';
 import { earnPointsFromOrder, revokePointsFromOrder } from './loyalty.controller.js';
+import { resolveSelection, reserveStock, returnStock, restoreOrderStock } from '../utils/inventory.js';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 const getEffectivePrice = (product) => {
@@ -89,7 +90,7 @@ export const createOrder = async (req, res, next) => {
       }
 
       const products = await Product.find({ _id: { $in: ids } })
-        .select("price discountedPrice seller quantity title images colors sizes status");
+        .select("price discountedPrice seller quantity title colors status isApproved");
       const productsById = new Map(products.map((p) => [p._id.toString(), p]));
 
       orderItemsSource = buyNowItems.map((it) => {
@@ -103,7 +104,6 @@ export const createOrder = async (req, res, next) => {
           quantity,
           colors: it.color ? [it.color] : [],
           sizes: it.size ? [it.size] : [],
-          image: it.image || product.images?.[0] || null,
         };
       });
       // لا يوجد كوبون مطبّق في الشراء المباشر (مفيش سلة أصلاً)
@@ -112,7 +112,7 @@ export const createOrder = async (req, res, next) => {
       cart = await Cart.findOne({ user: req.user._id })
         .populate({
           path: "items.product",
-          select: "price discountedPrice seller quantity title images colors sizes status",
+          select: "price discountedPrice seller quantity title colors status isApproved",
         });
 
       if (!cart || cart.items.length === 0) {
@@ -124,41 +124,41 @@ export const createOrder = async (req, res, next) => {
         quantity: item.quantity,
         colors: item.colors,
         sizes: item.sizes,
-        image: item.image,
       }));
       appliedCoupon = cart.appliedCoupon || null;
     }
 
-    const bulkOps = orderItemsSource.map((item) => ({
-      updateOne: {
-        filter: { _id: item.product._id, quantity: { $gte: item.quantity } },
-        update: { $inc: { quantity: -item.quantity, sold: item.quantity } },
-      },
-    }));
-
-    const result = await Product.bulkWrite(bulkOps);
-    if (result.modifiedCount !== orderItemsSource.length) {
-      // ── Partial failure: roll back any items that WERE decremented ──────
-      // If 3 of 4 products decremented but the 4th ran out of stock,
-      // the order is rejected — but those 3 decrements must be reversed
-      // or stock will be permanently corrupted without an actual order.
-      // We detect a decremented product by: currentQty < originalQty.
-      const rollbackOps = orderItemsSource.map((item) => ({
-        updateOne: {
-          filter: {
-            _id: item.product._id,
-            quantity: { $lt: item.product.quantity }, // was actually decremented
-          },
-          update: { $inc: { quantity: item.quantity, sold: -item.quantity } },
-        },
-      }));
-      try {
-        await Product.bulkWrite(rollbackOps);
-      } catch (rollbackErr) {
-        console.error('[CRITICAL] Stock rollback failed after partial bulkWrite:', rollbackErr);
+    // ── v5: stock is tracked per Product + Color + Size ─────────────────────
+    // 1) Validate every selection against the product's own colors/sizes (clear errors).
+    // 2) The same variant may appear on several lines, so check the SUM per variant.
+    const variantTotals = new Map();
+    for (const item of orderItemsSource) {
+      if (!item.product || item.product.status !== "available") {
+        throw new createError("أحد المنتجات لم يعد متوفراً", 400);
       }
-      throw new createError("بعض المنتجات نفذت من المخزون", 400);
+      const colorValue = item.colors?.[0];
+      const size = item.sizes?.[0];
+      const k = `${item.product._id}|${String(colorValue).toLowerCase()}|${String(size).toUpperCase()}`;
+      const total = (variantTotals.get(k) || 0) + item.quantity;
+      variantTotals.set(k, total);
+      const { color, sizeEntry } = resolveSelection(item.product, colorValue, size, total);
+      // The snapshot (name/image) always comes from the product itself, never from the client
+      item.colorDoc = color;
+      item.sizeValue = sizeEntry.size;
     }
+
+    // 3) Take the stock atomically (all-or-nothing). Two buyers can never get the last piece.
+    const stockLines = orderItemsSource.map((item) => ({
+      productId: item.product._id,
+      colorValue: item.colorDoc.value,
+      size: item.sizeValue,
+      quantity: item.quantity,
+    }));
+    await reserveStock(stockLines);
+
+    // From here on, if anything fails before the order exists, the reserved stock is given back.
+    let order;
+    try {
 
     const subtotal = orderItemsSource.reduce(
       (sum, item) => sum + getEffectivePrice(item.product) * item.quantity,
@@ -185,16 +185,21 @@ export const createOrder = async (req, res, next) => {
     const total = Math.max(0, subtotal - discount + shippingFee);
     const secretCode = await generateUniqueSecretCode(req.user._id);
 
-    const [order] = await Order.create([{
+    [order] = await Order.create([{
       buyer: req.user._id,
       items: orderItemsSource.map((item) => ({
         product: item.product._id,
         seller: item.product.seller,
+        title: item.product.title,
         quantity: item.quantity,
         price: getEffectivePrice(item.product),
-        color: item.colors?.[0] || null,
-        size: item.sizes?.[0] || null,
-        image: item.image || item.product.images?.[0] || null,
+        color: {
+          id: item.colorDoc._id || null,
+          name: item.colorDoc.name,
+          value: item.colorDoc.value,
+        },
+        size: item.sizeValue,
+        image: item.colorDoc.image,
       })),
       paymentMethod: paymentMethod || "cash",
       paymentStatus: "pending",
@@ -210,6 +215,13 @@ export const createOrder = async (req, res, next) => {
       coupon: appliedCoupon,
       secretCode,
     }]);
+    } catch (orderErr) {
+      // The order was not created: put the reserved stock back so it is not lost.
+      for (const line of stockLines) {
+        try { await returnStock(line); } catch (e) { console.error('[CRITICAL] Stock return failed:', line, e); }
+      }
+      throw orderErr;
+    }
 
     // نحذف السلة فقط لو الطلب اتعمل من السلة فعلاً (مش من "اشترِ الآن")
     if (cart) {
@@ -393,6 +405,14 @@ export const updateDeliveryStatus = async (req, res, next) => {
 
     const oldStatus = order.deliveryStatus;
     order.deliveryStatus = deliveryStatus;
+
+    // Return the stock to the exact color + size when an order is cancelled before delivery.
+    // (A delivered order that comes back is a return: the goods must be inspected first, so no automatic restock.)
+    if (deliveryStatus === 'cancelled' && oldStatus !== 'cancelled' && oldStatus !== 'delivered' && !order.stockRestored) {
+      const report = await restoreOrderStock(order);
+      order.stockRestored = true;
+      if (report.skipped.length) console.warn(`[Stock] Order ${order._id}: ${report.skipped.length} item(s) could not be restocked (old order format / color or size removed)`, report.skipped);
+    }
     await order.save();
 
     // Award loyalty points when order is delivered
@@ -511,7 +531,7 @@ export const getAdminOrders = async (req, res, next) => {
     const total = await Order.countDocuments(filter);
     const orders = await Order.find(filter)
       .populate('buyer', 'firstName lastName email phone')
-      .populate({ path: 'items.product', select: 'title titleEn images' })
+      .populate({ path: 'items.product', select: 'title titleEn' })
       .populate({ path: 'items.seller', select: 'firstName lastName email phone wallet' })
       .sort(sortObj).skip(skip).limit(limit).lean();
     console.log(orders, 'orders25')
@@ -538,7 +558,7 @@ export const getUserOrders = async (req, res, next) => {
     const orders = await Order.find(filter)
       .populate({
         path: 'items.product',
-        select: 'title titleEn name images price discountedPrice'
+        select: 'title titleEn name price discountedPrice'
       })
       .sort(sortObj)
       .skip(skip)
@@ -568,7 +588,7 @@ export const getSellerOrders = async (req, res, next) => {
     const total = await Order.countDocuments(filter);
     const orders = await Order.find(filter)
       .select('-secretCode -discount -payoutProcessed -deliveryInfo')
-      .populate('items.product', 'title titleEn images')
+      .populate('items.product', 'title titleEn')
       .sort(sortObj)
       .skip(skip)
       .limit(limit)
@@ -606,7 +626,7 @@ export const getUserOrderById = async (req, res, next) => {
     const userId = req.user._id.toString();
     const order = await Order.findById(req.params.id)
       .populate('buyer', 'firstName lastName email phone')
-      .populate({ path: 'items.product', select: 'title titleEn images' }).lean();
+      .populate({ path: 'items.product', select: 'title titleEn' }).lean();
 
     if (!order) throw new createError('الطلب غير موجود', 404);
 
@@ -630,7 +650,7 @@ export const printInvoice = async (req, res, next) => {
     const userId = req.user._id.toString();
     const order = await Order.findById(req.params.id)
       .populate('buyer', 'firstName lastName email phone')
-      .populate({ path: 'items.product', select: 'title titleEn images' }).lean();
+      .populate({ path: 'items.product', select: 'title titleEn' }).lean();
 
     if (!order) throw new createError('الطلب غير موجود', 404);
 

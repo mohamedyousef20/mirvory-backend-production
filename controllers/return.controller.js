@@ -140,7 +140,7 @@ export const getReturnRequestsForAdmin = async (req, res, next) => {
         .populate('user', 'firstName lastName email phone')
         .populate('seller', 'firstName lastName email phone')
         .populate('order', 'orderNumber buyer')
-        .populate('product', 'title price images')
+        .populate('product', 'title price colors')
         .sort(withStableTiebreaker({ createdAt: -1 }))
         .skip(skip)
         .limit(limit)
@@ -269,7 +269,7 @@ export const getReturnRequestById = async (req, res, next) => {
 
     const returnRequest = await ReturnRequest.findById(id)
       .populate('order', 'orderNumber createdAt totalPrice')
-      .populate('product', 'title price images')
+      .populate('product', 'title price colors')
       .populate('user', 'firstName lastName email phone')
       .populate('seller', 'firstName lastName email');
     if (!returnRequest) throw new createError('طلب الإرجاع غير موجود', 404);
