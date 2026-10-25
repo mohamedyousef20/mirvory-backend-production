@@ -2,6 +2,7 @@ import Order from '../models/order.model.js';
 import Product from '../models/product.model.js';
 import User from '../models/user.model.js';
 import Cart from '../models/cart.model.js';
+import Promotion from '../models/promotion.model.js';
 import ShippingSettings from '../models/shippingSettings.model.js';
 import mongoose from 'mongoose';
 import createError from '../utils/error.js';
@@ -10,6 +11,7 @@ import { formatPaginationResponse } from '../middlewares/pagination.js';
 import { withStableTiebreaker } from '../utils/pagination.js';
 import { earnPointsFromOrder, revokePointsFromOrder } from './loyalty.controller.js';
 import { resolveSelection, reserveStock, returnStock, restoreOrderStock } from '../utils/inventory.js';
+import { priceOrder } from '../services/promotion.service.js';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 const getEffectivePrice = (product) => {
@@ -90,7 +92,7 @@ export const createOrder = async (req, res, next) => {
       }
 
       const products = await Product.find({ _id: { $in: ids } })
-        .select("price discountedPrice seller quantity title colors status isApproved");
+        .select("price discountedPrice seller quantity title colors status isApproved category");
       const productsById = new Map(products.map((p) => [p._id.toString(), p]));
 
       orderItemsSource = buyNowItems.map((it) => {
@@ -112,7 +114,7 @@ export const createOrder = async (req, res, next) => {
       cart = await Cart.findOne({ user: req.user._id })
         .populate({
           path: "items.product",
-          select: "price discountedPrice seller quantity title colors status isApproved",
+          select: "price discountedPrice seller quantity title colors status isApproved category",
         });
 
       if (!cart || cart.items.length === 0) {
@@ -160,29 +162,73 @@ export const createOrder = async (req, res, next) => {
     let order;
     try {
 
-    const subtotal = orderItemsSource.reduce(
-      (sum, item) => sum + getEffectivePrice(item.product) * item.quantity,
-      0
-    );
-    const discount = appliedCoupon?.discountAmount || 0;
+    // ── Server-side pricing (single source of truth) ──────────────────────
+    // Promotions are re-verified here against the DB, never trusted from the
+    // client. Shipping comes from the existing ShippingSettings (+ live
+    // free-shipping promotion). All math runs in integer piasters.
+    const pricing = await priceOrder({
+      items: orderItemsSource,
+      deliveryMethod: deliveryMethod || "home",
+      address: deliveryInfo?.address || "",
+      couponDiscount: appliedCoupon?.discountAmount || 0,
+      couponCode: appliedCoupon?.code || null,
+    });
 
-    const shippingSettings = await ShippingSettings.getSettings();
-    let shippingFee = shippingSettings.shippingFee;
+    const subtotal = pricing.subtotal;
+    const discount = pricing.promotionDiscount + pricing.couponDiscount;
+    const shippingFee = pricing.shippingFee;
+    const total = pricing.total;
 
-    if (shippingSettings.freeShippingEnabled && subtotal >= shippingSettings.freeShippingMinimum) {
-      shippingFee = 0;
-    }
-    if (shippingSettings.freePickupShipping && deliveryMethod === "pickup") {
-      shippingFee = 0;
-    }
-    if (shippingSettings.freeMetroShipping && deliveryInfo.address) {
-      const isMetro = shippingSettings.metroAreas?.some((area) =>
-        deliveryInfo.address.toLowerCase().includes(area.toLowerCase())
-      );
-      if (isMetro) shippingFee = 0;
+    // ── Gift lines from live promotions (price 0, stock reserved like any item) ──
+    const giftOrderItems = [];
+    const giftStockLines = [];
+    for (const gift of pricing.giftLines || []) {
+      try {
+        if (!isValidObjectId(gift.productId)) continue;
+        const giftProduct = await Product.findById(gift.productId)
+          .select("title seller price colors status isApproved")
+          .lean();
+        if (!giftProduct || giftProduct.status !== "available") continue;
+
+        const colorEntry = (giftProduct.colors || []).find(
+          (c) => c.available !== false && (c.sizes || []).some((s2) => s2.quantity >= gift.quantity)
+        );
+        if (!colorEntry) continue; // gift out of stock → promotion is skipped, never a phantom gift
+        const sizeEntry = colorEntry.sizes.find((s2) => s2.quantity >= gift.quantity);
+
+        giftStockLines.push({
+          productId: giftProduct._id,
+          colorValue: colorEntry.value,
+          size: sizeEntry.size,
+          quantity: gift.quantity,
+        });
+        giftOrderItems.push({
+          product: giftProduct._id,
+          seller: giftProduct.seller,
+          title: giftProduct.title,
+          quantity: gift.quantity,
+          price: 0,
+          color: { id: colorEntry._id || null, name: colorEntry.name, value: colorEntry.value },
+          size: sizeEntry.size,
+          image: colorEntry.image,
+          isGift: true,
+          promotionId: gift.promotionId,
+        });
+      } catch (giftError) {
+        console.error('[promotion] gift resolution failed:', giftError.message);
+      }
     }
 
-    const total = Math.max(0, subtotal - discount + shippingFee);
+    if (giftStockLines.length) {
+      try {
+        await reserveStock(giftStockLines);
+      } catch (giftStockError) {
+        console.error('[promotion] gift stock reservation failed:', giftStockError.message);
+        giftStockLines.length = 0;
+        giftOrderItems.length = 0;
+      }
+    }
+
     const secretCode = await generateUniqueSecretCode(req.user._id);
 
     [order] = await Order.create([{
@@ -200,7 +246,7 @@ export const createOrder = async (req, res, next) => {
         },
         size: item.sizeValue,
         image: item.colorDoc.image,
-      })),
+      })).concat(giftOrderItems),
       paymentMethod: paymentMethod || "cash",
       paymentStatus: "pending",
       deliveryStatus: "pending",
@@ -213,6 +259,13 @@ export const createOrder = async (req, res, next) => {
       },
       subtotal, discount, shippingFee, total,
       coupon: appliedCoupon,
+      promotions: {
+        discount: pricing.promotionDiscount,
+        freeShipping: Boolean(pricing.freeShippingFromPromotion || (shippingFee === 0 && deliveryMethod !== "pickup")),
+        applied: (pricing.discounts || []).map((d) => ({
+          promotionId: d.promotionId, name: d.name, kind: d.kind, amount: d.amount,
+        })),
+      },
       secretCode,
     }]);
     } catch (orderErr) {
@@ -220,12 +273,26 @@ export const createOrder = async (req, res, next) => {
       for (const line of stockLines) {
         try { await returnStock(line); } catch (e) { console.error('[CRITICAL] Stock return failed:', line, e); }
       }
+      for (const line of giftStockLines) {
+        try { await returnStock(line); } catch (e) { console.error('[CRITICAL] Gift stock return failed:', line, e); }
+      }
       throw orderErr;
     }
 
     // نحذف السلة فقط لو الطلب اتعمل من السلة فعلاً (مش من "اشترِ الآن")
     if (cart) {
       await Cart.findByIdAndDelete(cart._id);
+    }
+
+    // Redemption counters: atomic $inc, guarded by the same limit condition,
+    // so two simultaneous checkouts can never exceed a promotion's usage limit.
+    for (const d of pricing.discounts || []) {
+      try {
+        await Promotion.updateOne(
+          { _id: d.promotionId, $or: [{ usageLimit: null }, { $expr: { $lt: ['$usageCount', '$usageLimit'] } }] },
+          { $inc: { usageCount: 1 } }
+        );
+      } catch (e) { console.error('[promotion] usage increment failed:', e.message); }
     }
 
     (async () => {

@@ -14,6 +14,7 @@ import couponRoutes from './coupon.routes.js';
 import dashboardRoutes from './dashboard.routes.js';
 import complaintRoutes from './complaint.routes.js';
 import offerRoutes from './offer.routes.js';
+import promotionRoutes from './promotion.routes.js';
 import shippingSettingsRoutes from './shippingSettings.routes.js';
 import unavailableProductRequestRoutes from './unavailableProductRequest.routes.js';
 import loyaltyRoutes from './loyalty.routes.js';
@@ -36,6 +37,7 @@ const mountRoutes = (app) => {
     app.use('/api/dashboard', dashboardRoutes);
     app.use('/api/complaints', complaintRoutes);
     app.use('/api/offers', offerRoutes);
+    app.use('/api/promotions', promotionRoutes);
     app.use('/api/shipping-settings', shippingSettingsRoutes);
     app.use('/api/unavailable-product-requests', unavailableProductRequestRoutes);
     app.use('/api/loyalty', loyaltyRoutes);

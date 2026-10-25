@@ -67,6 +67,10 @@ const orderSchema = new mongoose.Schema({
       type: Boolean,
       default: false
     },
+
+    // Free gift coming from a promotion (price 0, linked to its promotion)
+    isGift: { type: Boolean, default: false },
+    promotionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Promotion', default: null },
   }],
 
   deliveryInfo: {
@@ -80,6 +84,13 @@ const orderSchema = new mongoose.Schema({
   payoutDate: Date, paymentData: mongoose.Schema.Types.Mixed,
   subtotal: Number, discount: Number, shippingFee: Number, total: Number,
   coupon: { code: String, discountAmount: Number, originalTotal: Number, discountedTotal: Number },
+  // Snapshot of the promotions that were re-verified and applied at checkout.
+  // Kept on the order so historical transactions stay readable forever.
+  promotions: {
+    discount: { type: Number, default: 0 },
+    freeShipping: { type: Boolean, default: false },
+    applied: [{ promotionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Promotion' }, name: String, kind: String, amount: Number }],
+  },
   deliveryMethod: { type: String, enum: ["home", "pickup"], default: "home" },
   deliveryStatus: { type: String, enum: ["pending", "shipped", "delivered", "cancelled"], default: "pending" },
   deliveredAt: Date, payoutProcessed: { type: Boolean, default: false },
