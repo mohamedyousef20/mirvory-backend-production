@@ -7,6 +7,7 @@ import {
   approveProduct,
   rejectProduct,
   getProductsForAdmin,
+  getProductFilterFacets,
   getFeaturedProducts,
   getNewArrivals,
   getSellerProducts,
@@ -47,6 +48,9 @@ router.patch('/:id', protect, uploadImages, updateProduct);
 // مسارات البائع
 router.get('/seller/products', protect, isSeller, paginate(12), sort(), buildFilter(commonFilters.product), getSellerProducts);
 router.delete('/', protect, isSeller, deleteProduct);
+// v5: REST-style delete. Same permission rules (seller = own products only,
+// admin/super_admin = any product), enforced inside the controller.
+router.delete('/:productId', protect, isSeller, deleteProduct);
 
 // مسارات عامة
 // Get all products in category
@@ -61,6 +65,9 @@ router.get('/search/recent', protect, getRecentSearches);
 router.get('/search/trending', getTrendingSearches);
 // Clear search history (requires auth)
 router.delete('/search/history', protect, clearSearchHistory);
+
+// Available filter values (sizes / colors / price bounds)
+router.get('/filters/facets', getProductFilterFacets);
 
 // Get all products in category
 router.get('/', paginate(12), sort(), buildFilter(commonFilters.product), getProducts);

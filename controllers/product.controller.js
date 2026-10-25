@@ -7,6 +7,8 @@ import { formatPaginationResponse } from '../middlewares/pagination.js';
 import { withStableTiebreaker } from '../utils/pagination.js';
 import cloudinary from '../config/cloudinary.js';
 import { normalizeColors, toClientProduct } from '../utils/inventory.js';
+import AuditLogService from '../services/auditLog.service.js';
+import { buildProductFilter, buildProductFacets } from '../utils/productFilters.js';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
@@ -212,22 +214,61 @@ export const updateProduct = async (req, res, next) => {
 
 export const deleteProduct = async (req, res, next) => {
   try {
-    const { id } = req.body;
+    // The id may come in the body (legacy callers) or in the URL.
+    const id = req.body?.id || req.params?.productId || req.params?.id;
     if (!isValidObjectId(id)) throw new createError("معرف المنتج غير صالح", 400);
 
     const product = await Product.findById(id);
     if (!product) throw new createError("المنتج غير موجود", 404);
 
-    if (product.seller.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+    const isAdminUser = ['admin', 'super_admin'].includes(req.user.role);
+    const isOwner = product.seller.toString() === req.user._id.toString();
+
+    // Admins/Super Admins may delete ANY products (whatever the seller is).
+    // Sellers may delete only their own products. Everyone else is refused.
+    if (!isAdminUser && !isOwner) {
       throw new createError("غير مصرح لك بحذف هذا المنتج", 403);
     }
 
-    // 🚨 الحل المعماري الصارم: الحذف المنطقي Soft Delete لحماية استقرار قواعد البيانات المالية
+    if (product.status === 'deleted') {
+      return res.status(200).json({ success: true, message: 'هذا المنتج محذوف بالفعل', alreadyDeleted: true });
+    }
+
+    // 🚨 الحذف المنطقي Soft Delete لحماية استقرار قواعد البيانات المالية:
+    // orders/invoices keep their own snapshot (title/price/color/image), so past
+    // orders and financial records stay intact after this delete.
+    const previousStatus = product.status;
     product.status = 'deleted';
     product.isApproved = false;
     await product.save();
 
-    res.status(200).json({ success: true, message: 'تم إيقاف وحذف المنتج منطقياً لضمان سلامة الفواتير المرتبطة' });
+    // Admin actions are documented in the existing audit log (best-effort).
+    if (isAdminUser) {
+      try {
+        await AuditLogService.logAction({
+          adminId: req.user._id,
+          actionType: 'product_delete',
+          entityType: 'product',
+          entityId: product._id,
+          oldValue: { status: previousStatus, isApproved: true, seller: product.seller, title: product.title },
+          newValue: { status: 'deleted', isApproved: false, deletedByAdmin: true },
+          reason: req.body?.reason || 'حذف منتج من لوحة الإدارة',
+          ipAddress: AuditLogService.getClientIP(req),
+          userAgent: AuditLogService.getUserAgent(req),
+          metadata: { sellerId: product.seller, productTitle: product.title },
+        });
+      } catch (auditError) {
+        console.error('AUDIT_LOG_ERROR (product_delete):', auditError.message);
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: isAdminUser && !isOwner
+        ? 'تم حذف المنتج منطقياً بواسطة الإدارة مع الحفاظ على سجل الطلبات'
+        : 'تم إيقاف وحذف المنتج منطقياً لضمان سلامة الفواتير المرتبطة',
+      productId: product._id,
+    });
   } catch (error) { next(error); }
 };
 
@@ -368,6 +409,16 @@ export const getProducts = async (req, res, next) => {
       }
     });
 
+    // Search + facet filters (size / color / rating / text) are resolved in the
+    // database through the shared builder, so the WHOLE matching set is filtered
+    // before pagination — never only the products of the current page.
+    const { filter: facetFilter } = buildProductFilter(req.query);
+    Object.keys(facetFilter).forEach((key) => {
+      if (key === 'isApproved' || key === 'status') return; // already enforced
+      if (key === '$or') { filter.$and = [...(filter.$and || []), { $or: facetFilter.$or }]; return; }
+      filter[key] = facetFilter[key];
+    });
+
     const [total, products] = await Promise.all([
       Product.countDocuments(filter),
       Product.find(filter)
@@ -381,6 +432,16 @@ export const getProducts = async (req, res, next) => {
     ]);
 
     res.status(200).json(formatPaginationResponse(products.map(toClientProduct), total, req.pagination));
+  } catch (error) { next(error); }
+};
+
+// GET /api/products/filters/facets — available sizes / colors / price bounds
+// for the storefront filter panel (computed on the DB, honours the active filters).
+export const getProductFilterFacets = async (req, res, next) => {
+  try {
+    const { filter } = buildProductFilter(req.query);
+    const facets = await buildProductFacets(Product, filter);
+    res.status(200).json({ success: true, data: facets });
   } catch (error) { next(error); }
 };
 

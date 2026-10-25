@@ -1,4 +1,5 @@
 import Cart from '../models/cart.model.js';
+import { priceOrder } from '../services/promotion.service.js';
 import Product from '../models/product.model.js';
 import asyncHandler from 'express-async-handler';
 import createError from '../utils/error.js';
@@ -23,9 +24,26 @@ const withItemStock = (cart) => {
 
 export const getCart = asyncHandler(async (req, res, next) => {
   const cart = await Cart.findOne({ user: req.user._id })
-    .populate({ path: 'items.product', select: 'title titleEn colors price discountedPrice seller quantity status' });
+    .populate({ path: 'items.product', select: 'title titleEn colors price discountedPrice seller quantity status category' });
 
   if (!cart) return res.status(404).json({ message: 'السلة غير موجودة' });
+
+  // Display-only breakdown: the same service that prices the order, so the cart
+  // shows exactly what checkout will charge (promotions + free shipping).
+  try {
+    const pricing = await priceOrder({
+      items: cart.items.map((i) => ({ product: i.product, quantity: i.quantity })),
+      deliveryMethod: req.query.deliveryMethod === 'pickup' ? 'pickup' : 'home',
+      address: req.query.address || '',
+      couponDiscount: cart.appliedCoupon?.discountAmount || 0,
+      couponCode: cart.appliedCoupon?.code || null,
+    });
+    const payload = withItemStock(cart);
+    return res.json({ ...payload, pricing });
+  } catch (pricingError) {
+    console.error('[cart] pricing preview failed:', pricingError.message);
+  }
+
   res.json(withItemStock(cart));
 });
 
