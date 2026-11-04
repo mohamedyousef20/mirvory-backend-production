@@ -7,6 +7,7 @@ import ShippingSettings from '../models/shippingSettings.model.js';
 import mongoose from 'mongoose';
 import createError from '../utils/error.js';
 import { createNotifications } from '../utils/notification.js';
+import { sendPushToAdmins } from '../utils/webPush.js';
 import { formatPaginationResponse } from '../middlewares/pagination.js';
 import { withStableTiebreaker } from '../utils/pagination.js';
 import { earnPointsFromOrder, revokePointsFromOrder } from './loyalty.controller.js';
@@ -325,6 +326,14 @@ export const createOrder = async (req, res, next) => {
             data: { orderId: order._id }, link: `/orders/${order._id}`,
           })] : []),
         ]);
+
+        // Web Push to admin devices (does not block the response)
+        sendPushToAdmins({
+          title: "🔔 طلب جديد",
+          body: `طلب جديد. رقم الطلب: ${order._id.toString().slice(-6)}`,
+          url: "/admin",
+          tag: `order-${order._id.toString()}`,
+        }).catch((err) => console.error("[webPush] admin push failed:", err?.message));
       } catch (err) {
         if (process.env.NODE_ENV !== "production") console.error("Notification Error:", err);
       }
