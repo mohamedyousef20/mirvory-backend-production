@@ -4,6 +4,7 @@ import orderRoutes from './order.routes.js';
 import guestOrderRoutes from './guestOrder.routes.js';
 import guestCartRoutes from './guestCart.routes.js';
 import notificationRoutes from './notification.routes.js';
+import pushRoutes from './push.routes.js';
 import returnRoutes from './return.routes.js';
 import pickupRoutes from './pickup.routes.js';
 import cartRoutes from './cart.routes.js';
@@ -28,6 +29,7 @@ const mountRoutes = (app) => {
     app.use('/api/guest-orders', guestOrderRoutes);
     app.use('/api/guest-cart', guestCartRoutes);
     app.use('/api/notifications', notificationRoutes);
+    app.use('/api/push', pushRoutes);
     app.use('/api/returns', returnRoutes);
     app.use('/api/pickup', pickupRoutes);
     app.use('/api/categories', categoryRoutes);
