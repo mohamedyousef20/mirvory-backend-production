@@ -4,13 +4,7 @@ import Joi from "joi";
 export const registerUserValid = async (req, res, next) => {
     // Address schema
     const addressSchema = Joi.object({
-        governorate: Joi.string()
-            .valid("cairo", "giza", "qalyubia")
-            .required()
-            .messages({
-                "any.only": "المحافظة يجب أن تكون داخل القاهرة الكبرى فقط",
-                "string.empty": "المحافظة مطلوبة"
-            }),
+       
 
         city: Joi.string()
             .min(2)
