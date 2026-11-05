@@ -161,13 +161,14 @@ export const createOrder = async (req, res, next) => {
 
     // From here on, if anything fails before the order exists, the reserved stock is given back.
     let order;
+    let pricing;
     try {
 
     // ── Server-side pricing (single source of truth) ──────────────────────
     // Promotions are re-verified here against the DB, never trusted from the
     // client. Shipping comes from the existing ShippingSettings (+ live
     // free-shipping promotion). All math runs in integer piasters.
-    const pricing = await priceOrder({
+    pricing = await priceOrder({
       items: orderItemsSource,
       deliveryMethod: deliveryMethod || "home",
       address: deliveryInfo?.address || "",
