@@ -7,6 +7,7 @@ import GuestOrder from '../models/guestOrder.model.js';
 import ShippingSettings from '../models/shippingSettings.model.js';
 import createError from '../utils/error.js';
 import { createNotifications } from '../utils/notification.js';
+import { sendPushToAdmins } from '../utils/webPush.js';
 import { resolveSelection, reserveStock, returnStock } from '../utils/inventory.js';
 
 // ─────────────────────────────────────────────
@@ -341,6 +342,14 @@ export const createGuestOrder = async (req, res, next) => {
       }
       throw orderErr;
     }
+
+    // ── 11b. Web Push to admin devices (guest orders, fire-and-forget) ──
+    sendPushToAdmins({
+      title: "🔔 طلب جديد (ضيف)",
+      body: `طلب جديد من ضيف: ${guestName}. رقم الطلب: ${order._id.toString().slice(-6)}`,
+      url: "/admin",
+      tag: `order-${order._id.toString()}`,
+    }).catch((err) => console.error("[webPush] guest order admin push failed:", err?.message));
 
     // ── 12. Notify sellers ──────────────────────────────────────────
     setImmediate(async () => {
