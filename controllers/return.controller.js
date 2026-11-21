@@ -15,7 +15,22 @@ const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 export const createReturnRequest = async (req, res, next) => {
   try {
-    const { orderId, reason, itemId, images } = req.body;
+    const { orderId, reason, itemId, images, type = 'return', exchangeSize, exchangeColor,
+      refundMethod, refundAccount, pickupAddress, preferredSlot, notes } = req.body;
+
+    if (!['return', 'exchange'].includes(type)) throw new createError('نوع الطلب غير صالح', 400);
+    if (type === 'exchange' && !String(exchangeSize || '').trim()) {
+      throw new createError('يرجى اختيار المقاس البديل للاستبدال', 400);
+    }
+    if (type === 'return' && refundMethod && !['instapay', 'e_wallet', 'cash'].includes(refundMethod)) {
+      throw new createError('طريقة الاسترداد غير صالحة', 400);
+    }
+    if (type === 'return' && ['instapay', 'e_wallet'].includes(refundMethod) && !String(refundAccount || '').trim()) {
+      throw new createError('يرجى إدخال بيانات التحويل', 400);
+    }
+    if (preferredSlot && !['morning', 'evening'].includes(preferredSlot)) {
+      throw new createError('موعد الزيارة غير صالح', 400);
+    }
 
     if (!isValidObjectId(orderId) || !isValidObjectId(itemId)) {
       throw new createError("بيانات الطلب أو المنتج غير صالحة", 400);
@@ -73,7 +88,15 @@ export const createReturnRequest = async (req, res, next) => {
       reason,
       item: itemId,
       images: images || [],
-      status: 'pending'
+      status: 'pending',
+      type,
+      exchangeSize: type === 'exchange' ? String(exchangeSize).trim() : null,
+      exchangeColor: type === 'exchange' ? (exchangeColor || null) : null,
+      refundMethod: type === 'return' ? (refundMethod || null) : null,
+      refundAccount: type === 'return' ? (refundAccount || null) : null,
+      pickupAddress: pickupAddress || null,
+      preferredSlot: preferredSlot || null,
+      notes: notes || ''
     });
 
     await returnRequest.save();

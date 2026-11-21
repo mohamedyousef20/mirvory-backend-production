@@ -1,7 +1,7 @@
 import express from 'express';
 import {
   register, login, verifyEmail, forgetPassword, verifyResetCode,
-  resetPassword, updateProfile, getSellerBalance, getSellerForAdmin,
+  resetPassword, updateProfile, updatePreferredSize, getSellerBalance, getSellerForAdmin,
   getUsersForAdmin, searchUsersForAdmin, searchUsers, resendVerification,
   changeUserPassword, getMe, refreshToken, logout, updateVendorBalanceByAdmin,
   updateVendorStatusByAdmin, toggleUserActiveStatus, permanentlyDeleteUser,
@@ -43,6 +43,7 @@ router.use(protect);
 
 router.get('/me', getMe);
 router.patch('/profile', updateUserValid, updateProfile);
+router.patch('/preferred-size', updatePreferredSize);
 router.patch('/change-password', changePasswordValid, changeUserPassword);
 router.get('/seller/orders', isSeller, paginate(12), sort({ createdAt: -1 }), getSellerOrders);
 router.get('/seller/balance', isSeller, getSellerBalance);

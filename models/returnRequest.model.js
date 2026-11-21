@@ -60,6 +60,31 @@ const returnRequestSchema = new mongoose.Schema(
 
     rejectionReason: String,
 
+    // 'return' = refund request, 'exchange' = swap size/color
+    type: {
+      type: String,
+      enum: ['return', 'exchange'],
+      default: 'return'
+    },
+
+    exchangeSize: { type: String, trim: true, default: null },
+    exchangeColor: { type: String, trim: true, default: null },
+
+    refundMethod: {
+      type: String,
+      enum: ['instapay', 'e_wallet', 'cash', null],
+      default: null
+    },
+    refundAccount: { type: String, trim: true, default: null },
+
+    pickupAddress: { type: String, trim: true, default: null },
+    preferredSlot: {
+      type: String,
+      enum: ['morning', 'evening', null],
+      default: null
+    },
+    notes: { type: String, trim: true, default: '' },
+
     refundAmount: {
       type: Number,
       default: 0

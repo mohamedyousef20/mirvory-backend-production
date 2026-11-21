@@ -982,3 +982,16 @@ export const setSocialCookies = async (req, res, next) => {
     next(new createError("حدث خطأ داخلي أثناء معالجة البيانات الأمنية", 500));
   }
 };
+
+// Save the user's preferred shoe size (EU). Empty value clears it.
+export const updatePreferredSize = async (req, res, next) => {
+  try {
+    const raw = req.body?.preferredSize;
+    const size = raw === null || raw === undefined || raw === '' ? null : String(raw).trim();
+    if (size !== null && !/^\d{2}(\.5)?$/.test(size)) {
+      throw new createError('المقاس غير صالح', 400);
+    }
+    await User.findByIdAndUpdate(req.user._id, { $set: { preferredSize: size } });
+    res.status(200).json({ success: true, preferredSize: size });
+  } catch (err) { next(err); }
+};

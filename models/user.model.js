@@ -230,6 +230,7 @@ const userSchema = new mongoose.Schema({
       push: { type: Boolean, default: true }
     }
   },
+  preferredSize: { type: String, trim: true, maxlength: 10, default: null },
   loyalty: {
     points: { type: Number, default: 0, min: 0 },
     tier: { type: String, enum: ['bronze', 'silver', 'gold', 'platinum'], default: 'bronze' },

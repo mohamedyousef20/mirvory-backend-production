@@ -5,7 +5,7 @@ import { getAdminOrders, getSellerOrders,
       createOrder, confirmPreparation, confirmItemPreparation,
       createOrderFilterObj, updateDeliveryStatus,
       getUserOrderById, getUserOrders, printInvoice, processOrderPayout,
-      deleteOrder } from '../controllers/order.controller.js';
+      deleteOrder, updateShipment } from '../controllers/order.controller.js';
 import { isAdmin, isSeller, protect } from '../middlewares/auth.js';
 import { paginate } from '../middlewares/pagination.js';
 import { sort } from '../middlewares/sort.js';
@@ -23,6 +23,7 @@ router.get('/:id', getUserOrderById);
 router.get('/:id/invoice', printInvoice);
 // router.get('/vendor/:vendorId/earnings', isSeller, getVendorEarnings);
 router.patch('/updateDelivery', isAdmin, updateDeliveryStatus);
+router.patch('/shipment', isAdmin, updateShipment);
 router.patch('/prepared/:id', isSeller, confirmPreparation);
 router.patch('/prepared/:orderId/item/:itemId', isSeller, confirmItemPreparation);
 router.patch('/update-payment',isAdmin, updatePayment);

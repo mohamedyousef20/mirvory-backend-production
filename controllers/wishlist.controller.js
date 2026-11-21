@@ -43,7 +43,7 @@ export const toggleWishlist = asyncHandler(async (req, res, next) => {
   if (!wishlist) {
     wishlist = await Wishlist.create({
       user: req.user._id,
-      products: [{ product: productId }]
+      products: [{ product: productId, priceAtAdd: product.discountedPrice ?? product.price }]
     });
 
     wishlist = await Wishlist.findById(wishlist._id).populate('products.product');
@@ -70,7 +70,7 @@ export const toggleWishlist = asyncHandler(async (req, res, next) => {
       data: wishlist
     });
   } else {
-    wishlist.products.push({ product: productId });
+    wishlist.products.push({ product: productId, priceAtAdd: product.discountedPrice ?? product.price });
     await wishlist.save();
 
     wishlist = await Wishlist.findById(wishlist._id).populate('products.product');
