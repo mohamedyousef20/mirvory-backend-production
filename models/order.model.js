@@ -98,6 +98,25 @@ const orderSchema = new mongoose.Schema({
   // Set once the stock of a cancelled order was returned to its color/size (prevents double restock)
   stockRestored: { type: Boolean, default: false },
   secretCode: { type: String, unique: true, required: true },
+ // Courier tracking data, entered/updated by admin from the courier company's system
+ shipment: {
+ courier: { type: String, trim: true, default: null },
+ waybillNumber: { type: String, trim: true, default: null },
+ currentStation: { type: String, trim: true, default: null },
+ currentStatus: { type: String, trim: true, default: null },
+ courierAgent: { name: { type: String, trim: true, default: null }, phone: { type: String, trim: true, default: null } },
+ branch: { name: { type: String, trim: true, default: null }, manager: { type: String, trim: true, default: null }, phone: { type: String, trim: true, default: null } },
+ route: [{ _id: false, label: { type: String, trim: true }, station: { type: String, trim: true }, note: { type: String, trim: true } }],
+ events: [{
+ _id: false,
+ status: { type: String, trim: true },
+ title: { type: String, required: true, trim: true },
+ description: { type: String, trim: true, default: '' },
+ station: { type: String, trim: true, default: '' },
+ occurredAt: { type: Date, default: Date.now },
+ }],
+ lastCheckedAt: { type: Date, default: null },
+ },
 }, { timestamps: true });
 
 // ─── Performance Indexes ────────────────────────────────────────────────────

@@ -17,6 +17,11 @@ const wishlistSchema = new mongoose.Schema({
     addedAt: {
       type: Date,
       default: Date.now
+    },
+    // price when the item was saved — used to show "price dropped" alerts
+    priceAtAdd: {
+      type: Number,
+      default: null
     }
   }]
 }, {
@@ -27,7 +32,7 @@ const wishlistSchema = new mongoose.Schema({
 wishlistSchema.pre(/^find/, function (next) {
   this.populate({
     path: 'products.product',
-    select: 'title description colors price discountedPrice discountPercentage category ratings status'
+    select: 'title description colors price discountedPrice discountPercentage category ratings status brand'
   });
   next();
 });
@@ -37,7 +42,7 @@ wishlistSchema.methods.addProduct = async function (productId) {
   const exists = this.products.some(item => item.product._id.toString() === productId.toString());
   
   if (!exists) {
-    this.products.push({ product: productId });
+    this.products.push({ product: productId, priceAtAdd: null });
     await this.save();
   }
   

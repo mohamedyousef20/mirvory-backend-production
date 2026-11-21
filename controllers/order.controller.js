@@ -868,3 +868,41 @@ export const deleteOrder = async (req, res, next) => {
     next(error);
   }
 };
+
+// Admin: set courier data and/or append timeline events on an order's shipment.
+// Body: { id, courier?, waybillNumber?, currentStation?, currentStatus?, courierAgent?, branch?, route?, events?: [{title, status?, description?, station?, occurredAt?}], replaceEvents?: boolean }
+export const updateShipment = async (req, res, next) => {
+  try {
+    const { id, events, replaceEvents, ...fields } = req.body || {};
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) throw new createError('معرف الطلب غير صالح', 400);
+
+    const order = await Order.findById(id);
+    if (!order) throw new createError('الطلب غير موجود', 404);
+
+    const shipment = order.shipment || {};
+    const simple = ['courier', 'waybillNumber', 'currentStation', 'currentStatus'];
+    simple.forEach((k) => { if (fields[k] !== undefined) shipment[k] = fields[k] || null; });
+    if (fields.courierAgent) shipment.courierAgent = { ...(shipment.courierAgent?.toObject?.() || shipment.courierAgent || {}), ...fields.courierAgent };
+    if (fields.branch) shipment.branch = { ...(shipment.branch?.toObject?.() || shipment.branch || {}), ...fields.branch };
+    if (Array.isArray(fields.route)) {
+      shipment.route = fields.route
+        .filter((r) => r && (String(r.label || '').trim() || String(r.station || '').trim()))
+        .map((r) => ({ label: String(r.label || '').trim(), station: String(r.station || '').trim(), note: String(r.note || '').trim() }));
+    }
+
+    if (Array.isArray(events)) {
+      const clean = events
+        .filter((e) => e && typeof e.title === 'string' && e.title.trim())
+        .map((e) => ({
+          status: e.status, title: e.title.trim(), description: e.description || '',
+          station: e.station || '', occurredAt: e.occurredAt ? new Date(e.occurredAt) : new Date(),
+        }));
+      shipment.events = replaceEvents ? clean : [...(shipment.events || []), ...clean];
+    }
+    shipment.lastCheckedAt = new Date();
+    order.shipment = shipment;
+    await order.save();
+
+    res.status(200).json({ success: true, message: 'تم تحديث بيانات الشحن', data: order.shipment });
+  } catch (err) { next(err); }
+};
