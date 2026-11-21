@@ -884,7 +884,11 @@ export const updateShipment = async (req, res, next) => {
     simple.forEach((k) => { if (fields[k] !== undefined) shipment[k] = fields[k] || null; });
     if (fields.courierAgent) shipment.courierAgent = { ...(shipment.courierAgent?.toObject?.() || shipment.courierAgent || {}), ...fields.courierAgent };
     if (fields.branch) shipment.branch = { ...(shipment.branch?.toObject?.() || shipment.branch || {}), ...fields.branch };
-    if (Array.isArray(fields.route)) shipment.route = fields.route;
+    if (Array.isArray(fields.route)) {
+      shipment.route = fields.route
+        .filter((r) => r && (String(r.label || '').trim() || String(r.station || '').trim()))
+        .map((r) => ({ label: String(r.label || '').trim(), station: String(r.station || '').trim(), note: String(r.note || '').trim() }));
+    }
 
     if (Array.isArray(events)) {
       const clean = events
