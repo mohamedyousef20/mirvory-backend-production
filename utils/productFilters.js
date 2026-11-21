@@ -141,7 +141,10 @@ export const buildProductFilter = (query = {}, { onlyAvailable = true } = {}) =>
 
   // 7) extras kept for compatibility with the existing UI
   if (query.brand) {
-    filter.brand = { $regex: escapeRegex(String(query.brand)), $options: 'i' };
+    const brandList = String(query.brand).split(',').map((b) => b.trim()).filter(Boolean);
+    filter.brand = brandList.length > 1
+      ? { $in: brandList.map((b) => new RegExp(`^${escapeRegex(b)}$`, 'i')) }
+      : { $regex: escapeRegex(brandList[0] || String(query.brand)), $options: 'i' };
     applied.brand = query.brand;
   }
   if (query.seller && isValidObjectId(query.seller)) {
@@ -169,6 +172,7 @@ export const buildProductFacets = async (Product, baseFilter = {}) => {
       $project: {
         price: 1,
         colors: 1,
+        brand: 1,
       },
     },
     {
@@ -181,6 +185,12 @@ export const buildProductFacets = async (Product, baseFilter = {}) => {
           { $match: { 'colors.sizes.quantity': { $gt: 0 } } },
           { $group: { _id: '$colors.sizes.size', count: { $sum: 1 } } },
           { $sort: { _id: 1 } },
+        ],
+        brands: [
+          { $match: { brand: { $nin: [null, ''] } } },
+          { $group: { _id: '$brand', count: { $sum: 1 } } },
+          { $sort: { count: -1 } },
+          { $limit: 30 },
         ],
         colors: [
           { $unwind: '$colors' },
@@ -199,6 +209,7 @@ export const buildProductFacets = async (Product, baseFilter = {}) => {
   return {
     price: { min: priceBucket.min || 0, max: priceBucket.max || 0 },
     sizes: (facet.sizes || []).filter((s) => s._id).map((s) => ({ size: s._id, count: s.count })),
+    brands: (facet.brands || []).filter((b) => b._id).map((b) => ({ brand: b._id, count: b.count })),
     colors: (facet.colors || [])
       .filter((c) => c._id && (c._id.value || c._id.name))
       .map((c) => ({ name: c._id.name || c._id.value, value: c._id.value || c._id.name, count: c.count })),
