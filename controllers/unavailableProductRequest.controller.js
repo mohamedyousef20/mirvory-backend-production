@@ -38,6 +38,12 @@ export const createRequest = async (req, res, next) => {
     const productId = trimmed(req.body?.productId) ?? trimmed(req.body?.product);
     let productName = trimmed(req.body?.productName);
     const imageUrl = trimmed(req.body?.imageUrl);
+    const brand = trimmed(req.body?.brand);
+    const rawBudget = req.body?.maxBudget;
+    const maxBudget = rawBudget === undefined || rawBudget === null || rawBudget === '' ? null : Number(rawBudget);
+    if (maxBudget !== null && (!Number.isFinite(maxBudget) || maxBudget < 0)) {
+      throw new createError('Budget must be a positive number', 400);
+    }
     if (!phone) {
       throw new createError('Phone number is required', 400);
     }
@@ -82,6 +88,8 @@ export const createRequest = async (req, res, next) => {
       size,
       color,
       notes,
+      brand,
+      maxBudget,
       quantity: parsedQuantity,
       product,
       productName,

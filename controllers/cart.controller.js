@@ -1,6 +1,7 @@
 import Cart from '../models/cart.model.js';
 import { priceOrder } from '../services/promotion.service.js';
 import Product from '../models/product.model.js';
+import User from '../models/user.model.js';
 import asyncHandler from 'express-async-handler';
 import createError from '../utils/error.js';
 import { resolveSelection, findColor, findSizeEntry } from '../utils/inventory.js';
@@ -22,9 +23,29 @@ const withItemStock = (cart) => {
   return obj;
 };
 
+
+// Display-only: attach the store name of each item's seller (cart UI shows "Seller: <store>").
+const withSellerNames = async (payload) => {
+  try {
+    const ids = [...new Set((payload.items || [])
+      .map((i) => i.product?.seller && String(i.product.seller))
+      .filter(Boolean))];
+    if (!ids.length) return payload;
+    const sellers = await User.find({ _id: { $in: ids } }).select('vendorProfile.storeName name').lean();
+    const names = new Map(sellers.map((u) => [String(u._id), u.vendorProfile?.storeName || u.name || '']));
+    payload.items = payload.items.map((i) => ({
+      ...i,
+      sellerName: i.product?.seller ? names.get(String(i.product.seller)) || '' : '',
+    }));
+  } catch (e) {
+    console.error('[cart] seller names failed:', e.message);
+  }
+  return payload;
+};
+
 export const getCart = asyncHandler(async (req, res, next) => {
   const cart = await Cart.findOne({ user: req.user._id })
-    .populate({ path: 'items.product', select: 'title titleEn colors price discountedPrice seller quantity status category' });
+    .populate({ path: 'items.product', select: 'title titleEn brand colors price discountedPrice seller quantity status category' });
 
   if (!cart) return res.status(404).json({ message: 'السلة غير موجودة' });
 
@@ -38,13 +59,13 @@ export const getCart = asyncHandler(async (req, res, next) => {
       couponDiscount: cart.appliedCoupon?.discountAmount || 0,
       couponCode: cart.appliedCoupon?.code || null,
     });
-    const payload = withItemStock(cart);
+    const payload = await withSellerNames(withItemStock(cart));
     return res.json({ ...payload, pricing });
   } catch (pricingError) {
     console.error('[cart] pricing preview failed:', pricingError.message);
   }
 
-  res.json(withItemStock(cart));
+  res.json(await withSellerNames(withItemStock(cart)));
 });
 
 export const addToCart = asyncHandler(async (req, res, next) => {
