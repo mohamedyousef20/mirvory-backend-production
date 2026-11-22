@@ -491,7 +491,7 @@ export const getProductById = async (req, res, next) => {
     if (!isValidObjectId(productId)) throw new createError("معرف المنتج غير صالح", 400);
 
     const product = await Product.findById(productId)
-      .populate('seller', 'firstName lastName email')
+      .populate('seller', 'firstName lastName email vendorProfile.storeName')
       .populate('category', '_id name nameEn description descriptionEn videoUrl').lean();
 
     if (!product || product.status === 'deleted') throw new createError("المنتج غير موجود", 404);
