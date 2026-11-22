@@ -62,6 +62,10 @@ const unavailableProductRequestSchema = new mongoose.Schema({
     min: 1
   },
 
+  // Concierge request extras (mobile redesign)
+  brand: { type: String, default: null, trim: true },
+  maxBudget: { type: Number, default: null, min: 0 },
+
   notes: {
     type: String,
     default: null,
