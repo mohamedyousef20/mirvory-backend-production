@@ -7,6 +7,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import mongoose from 'mongoose';
 
+export const LIMITED_EDITION_MAX_STOCK = 5;
+
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 /** `size=M,L` or `size=M&size=L` → ['M','L'] */
@@ -39,6 +41,8 @@ const SORT_MAP = {
   popular: { sold: -1 },
   best_selling: { sold: -1 },
   relevance: { sold: -1 },
+  discount: { discountPercentage: -1 },
+  sold: { sold: -1 },
 };
 
 export const buildProductSort = (sort) => SORT_MAP[String(sort || '').trim()] || null;
@@ -46,7 +50,7 @@ export const buildProductSort = (sort) => SORT_MAP[String(sort || '').trim()] ||
 /**
  * Builds the Mongo filter for the public storefront listing/search.
  * Supported (all combinable): search/q, category, size, color, minPrice,
- * maxPrice, minRating, brand, seller, inStock, status, isFeatured.
+ * maxPrice, minRating, brand, seller, inStock, limited (1–5 pairs left), status, isFeatured.
  * Returns `{ filter, sort, applied }` where `applied` is echoed to the client.
  */
 export const buildProductFilter = (query = {}, { onlyAvailable = true } = {}) => {
@@ -151,7 +155,12 @@ export const buildProductFilter = (query = {}, { onlyAvailable = true } = {}) =>
     filter.seller = query.seller;
     applied.seller = query.seller;
   }
-  if (String(query.inStock) === 'true') {
+  // Limited editions: still in stock but 5 pairs or fewer left in total
+  // (Product.quantity is the denormalized total of the available colors' sizes).
+  if (String(query.limited) === 'true') {
+    filter.quantity = { $gt: 0, $lte: LIMITED_EDITION_MAX_STOCK };
+    applied.limited = true;
+  } else if (String(query.inStock) === 'true') {
     filter.quantity = { $gt: 0 };
     applied.inStock = true;
   }
