@@ -10,31 +10,14 @@ import {
 
 const EMPTY_LOYALTY = {
   points: 0,
-  tier: 'bronze',
   totalEarned: 0,
   totalRedeemed: 0,
 };
 
 const normalizeLoyalty = (loyalty) => ({ ...EMPTY_LOYALTY, ...(loyalty ? loyalty.toObject?.() ?? loyalty : {}) });
 
-// Loyalty tier thresholds (points required)
-const TIER_THRESHOLDS = {
-  bronze: 0,
-  silver: 1000,
-  gold: 5000,
-  platinum: 10000
-};
-
 // Points earned per EGP spent
 const POINTS_PER_EGP = 1;
-
-// Calculate tier based on total earned points
-const calculateTier = (totalEarned) => {
-  if (totalEarned >= TIER_THRESHOLDS.platinum) return 'platinum';
-  if (totalEarned >= TIER_THRESHOLDS.gold) return 'gold';
-  if (totalEarned >= TIER_THRESHOLDS.silver) return 'silver';
-  return 'bronze';
-};
 
 // Get user loyalty information (authenticated users only)
 export const getUserLoyalty = async (req, res, next) => {
@@ -47,13 +30,9 @@ export const getUserLoyalty = async (req, res, next) => {
 
     const loyalty = normalizeLoyalty(user.loyalty);
 
-    res.status(200).json({
-      success: true,
-      loyalty,
-      tier: loyalty.tier,
-      nextTier: getNextTier(loyalty.tier),
-      pointsToNextTier: getPointsToNextTier(loyalty.tier, loyalty.totalEarned)
-    });
+    // Points-only system: the legacy `tier` field is intentionally not returned.
+    const { tier, ...pointsOnly } = loyalty;
+    res.status(200).json({ success: true, loyalty: pointsOnly });
   } catch (error) {
     next(error);
   }
@@ -107,16 +86,9 @@ export const earnPointsFromOrder = async (userId, orderId, orderAmount) => {
     const before = await User.findById(userId).select('loyalty').lean();
     if (!before) return;
 
-    const oldLoyalty = normalizeLoyalty(before.loyalty);
-    const oldTier = oldLoyalty.tier;
-    const newTier = calculateTier(oldLoyalty.totalEarned + pointsToEarn);
-
     const user = await User.findByIdAndUpdate(
       userId,
-      {
-        $inc: { 'loyalty.points': pointsToEarn, 'loyalty.totalEarned': pointsToEarn },
-        $set: { 'loyalty.tier': newTier },
-      },
+      { $inc: { 'loyalty.points': pointsToEarn, 'loyalty.totalEarned': pointsToEarn } },
       { new: true, select: 'loyalty' }
     ).lean();
 
@@ -132,19 +104,16 @@ export const earnPointsFromOrder = async (userId, orderId, orderAmount) => {
         referenceModel: 'Order',
         description: `Points earned from order #${orderId}`,
         balanceAfter,
-        tierBefore: oldTier,
-        tierAfter: newTier !== oldTier ? newTier : null
       });
     } catch (logError) {
       // Roll the balance back so the ledger and the balance cannot diverge.
       await User.findByIdAndUpdate(userId, {
         $inc: { 'loyalty.points': -pointsToEarn, 'loyalty.totalEarned': -pointsToEarn },
-        $set: { 'loyalty.tier': oldTier },
       });
       throw logError;
     }
 
-    return { pointsEarned: pointsToEarn, tierUpgraded: newTier !== oldTier, newTier };
+    return { pointsEarned: pointsToEarn };
   } catch (error) {
     console.error('Error earning points:', error);
   }
@@ -173,33 +142,27 @@ export const revokePointsFromOrder = async (userId, orderId, reason = 'order_rev
     const before = await User.findById(userId).select('loyalty').lean();
     if (!before) return;
 
-    const oldLoyalty = normalizeLoyalty(before.loyalty);
-    const oldTier = oldLoyalty.tier;
+    const current = normalizeLoyalty(before.loyalty);
     // Never push a balance negative: only take back what is still available.
-    const pointsToRevoke = Math.min(earned.points, oldLoyalty.points);
-    const newTotalEarned = Math.max(0, oldLoyalty.totalEarned - earned.points);
-    const newTier = calculateTier(newTotalEarned);
+    const pointsToRevoke = Math.min(earned.points, current.points);
+    const earnedToRemove = Math.min(earned.points, current.totalEarned);
+    if (pointsToRevoke <= 0 && earnedToRemove <= 0) return;
 
     const user = await User.findByIdAndUpdate(
       userId,
-      {
-        $inc: { 'loyalty.points': -pointsToRevoke, 'loyalty.totalEarned': -(oldLoyalty.totalEarned - newTotalEarned) },
-        $set: { 'loyalty.t     ier': newTier },
-      },
+      { $inc: { 'loyalty.points': -pointsToRevoke, 'loyalty.totalEarned': -earnedToRemove } },
       { new: true, select: 'loyalty' }
     ).lean();
 
     await LoyaltyTransaction.create({
       user: userId,
-      type: 'earned',
-      points: pointsToEarn,
-      source: 'order_completion',
+      type: 'adjusted',
+      points: -pointsToRevoke,
+      source: 'manual_adjustment',
       referenceId: orderId,
       referenceModel: 'Order',
-      description: `Points earned from order #${orderId}`,
-      balanceAfter,
-      tierBefore: oldTier,
-      ...(newTier !== oldTier ? { tierAfter: newTier } : {}),
+      description: `Points reversed for order #${orderId} (${reason})`,
+      balanceAfter: normalizeLoyalty(user?.loyalty).points,
     });
   } catch (error) {
     console.error('Error revoking points:', error);
@@ -226,8 +189,6 @@ export const redeemPoints = async (req, res, next) => {
       throw new createError('User not found', 404);
     }
 
-    const oldTier = normalizeLoyalty(before.loyalty).tier;
-
     // Conditional update: two concurrent redemptions cannot both pass the
     // balance check, so the balance can never go negative.
     const user = await User.findOneAndUpdate(
@@ -241,11 +202,6 @@ export const redeemPoints = async (req, res, next) => {
     }
 
     const loyalty = normalizeLoyalty(user.loyalty);
-    const newTier = calculateTier(loyalty.totalEarned);
-    if (newTier !== oldTier) {
-      await User.findByIdAndUpdate(req.user._id, { $set: { 'loyalty.tier': newTier } });
-    }
-
     // Create transaction record
     await LoyaltyTransaction.create({
       user: req.user._id,
@@ -256,17 +212,13 @@ export const redeemPoints = async (req, res, next) => {
       referenceModel: 'Order',
       description: `Points redeemed for discount`,
       balanceAfter: loyalty.points,
-      tierBefore: oldTier,
-      tierAfter: oldTier,
-      ...(newTier !== oldTier ? { tierAfter: newTier } : {}),
-    });   
+    });
 
     res.status(200).json({
       success: true,
       message: 'Points redeemed successfully',
       pointsRedeemed: points,
       remainingPoints: loyalty.points,
-      tier: newTier
     });
   } catch (error) {
     next(error);
@@ -292,7 +244,6 @@ export const adjustPoints = async (req, res, next) => {
       throw new createError('User not found', 404);
     }
 
-    const oldTier = normalizeLoyalty(before.loyalty).tier;
     const isAddition = points > 0;
 
     const update = isAddition
@@ -310,12 +261,6 @@ export const adjustPoints = async (req, res, next) => {
     }
 
     const loyalty = normalizeLoyalty(user.loyalty);
-    const newTier = calculateTier(loyalty.totalEarned);
-    if (newTier !== oldTier) {
-      await User.findByIdAndUpdate(userId, { $set: { 'loyalty.tier': newTier } });
-      loyalty.tier = newTier;
-    }
-
     // Create transaction record
     await LoyaltyTransaction.create({
       user: userId,
@@ -324,8 +269,6 @@ export const adjustPoints = async (req, res, next) => {
       source: 'manual_adjustment',
       description: notes || `Manual adjustment by admin`,
       balanceAfter: loyalty.points,
-      tierBefore: oldTier,
-      tierAfter: newTier !== oldTier ? newTier : null,
       adjustedBy: req.user._id,
       notes: notes
     });
@@ -343,14 +286,10 @@ export const adjustPoints = async (req, res, next) => {
 // Get all users loyalty info (admin only)
 export const getAllUsersLoyalty = async (req, res, next) => {
   try {
-    const { tier, search } = req.query;
+    const { search } = req.query;
     const { page, limit, skip } = parsePageParams(req.query, 20);
 
     const filter = { role: 'user' };
-    if (tier) {
-      filter['loyalty.tier'] = tier;
-    }
-
     if (search) {
       filter.$or = [
         { firstName: { $regex: search, $options: 'i' } },
@@ -396,11 +335,6 @@ export const getLoyaltyStats = async (req, res, next) => {
       },
     ]);
 
-    const tierBreakdown = await User.aggregate([
-      { $match: { role: 'user' } },
-      { $group: { _id: { $ifNull: ['$loyalty.tier', 'bronze'] }, count: { $sum: 1 } } },
-    ]);
-
     res.status(200).json({
       success: true,
       stats: {
@@ -409,11 +343,6 @@ export const getLoyaltyStats = async (req, res, next) => {
         totalPointsEarned: userStats?.totalPointsEarned ?? 0,
         totalPointsRedeemed: userStats?.totalPointsRedeemed ?? 0,
         totalPointsAvailable: userStats?.totalPointsAvailable ?? 0,
-        tiers: tierBreakdown.reduce(
-          (acc, { _id, count }) => ({ ...acc, [_id]: count }),
-          { bronze: 0, silver: 0, gold: 0, platinum: 0 }
-        ),
-        thresholds: TIER_THRESHOLDS,
         pointsPerEgp: POINTS_PER_EGP,
       },
     });
@@ -490,18 +419,3 @@ export const getUserTransactionsAdmin = async (req, res, next) => {
   }
 };
 
-// Helper functions
-const getNextTier = (currentTier) => {
-  const tiers = ['bronze', 'silver', 'gold', 'platinum'];
-  const currentIndex = tiers.indexOf(currentTier);
-  if (currentIndex < tiers.length - 1) {
-    return tiers[currentIndex + 1];
-  }
-  return null;
-};
-
-const getPointsToNextTier = (currentTier, totalEarned) => {
-  const nextTier = getNextTier(currentTier);
-  if (!nextTier) return 0;
-  return TIER_THRESHOLDS[nextTier] - totalEarned;
-};

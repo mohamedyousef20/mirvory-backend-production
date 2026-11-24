@@ -142,7 +142,16 @@ export const getActiveOffers = async (req, res, next) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    res.status(200).json(offers);
+    // Additive fields (no schema change): let clients run an accurate countdown
+    // even when the visitor's device clock is wrong.
+    const serverTime = now.toISOString();
+    const withCountdown = offers.map((o) => ({
+      ...o,
+      serverTime,
+      endsInSeconds: Math.max(0, Math.floor((new Date(o.endDate).getTime() - now.getTime()) / 1000))
+    }));
+
+    res.status(200).json(withCountdown);
   } catch (error) {
     next(error);
   }
