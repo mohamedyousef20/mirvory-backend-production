@@ -10,7 +10,9 @@ import { createNotifications } from '../utils/notification.js';
 import { sendPushToAdmins } from '../utils/webPush.js';
 import { formatPaginationResponse } from '../middlewares/pagination.js';
 import { withStableTiebreaker } from '../utils/pagination.js';
-import { earnPointsFromOrder, revokePointsFromOrder } from './loyalty.controller.js';
+import { earnPointsFromOrder, revokePointsFromOrder, refundRedeemedPointsForOrder } from './loyalty.controller.js';
+import LoyaltyTransaction from '../models/loyaltyTransaction.model.js';
+import { computeRedemption } from '../utils/loyaltyMath.js';
 import { resolveSelection, reserveStock, returnStock, restoreOrderStock } from '../utils/inventory.js';
 import { priceOrder } from '../services/promotion.service.js';
 
@@ -162,6 +164,8 @@ export const createOrder = async (req, res, next) => {
     // From here on, if anything fails before the order exists, the reserved stock is given back.
     let order;
     let pricing;
+    let pointsTaken = 0;
+    let pointsDiscount = 0;
     try {
 
     // ── Server-side pricing (single source of truth) ──────────────────────
@@ -177,9 +181,35 @@ export const createOrder = async (req, res, next) => {
     });
 
     const subtotal = pricing.subtotal;
-    const discount = pricing.promotionDiscount + pricing.couponDiscount;
+    let discount = pricing.promotionDiscount + pricing.couponDiscount;
     const shippingFee = pricing.shippingFee;
-    const total = pricing.total;
+    let total = pricing.total;
+
+    // ── Loyalty points redemption (server-side, validated against the DB) ──
+    // Cap base = merchandise after promotions and coupon, before shipping.
+    // Points are taken atomically (balance can never go negative) and given
+    // back below if the order cannot be created.
+    const requestedPoints = req.body?.redeemPoints;
+    if (requestedPoints !== undefined && requestedPoints !== null && Number(requestedPoints) !== 0) {
+      const buyer = await User.findById(req.user._id).select('loyalty').lean();
+      const basePiasters = Math.max(0, Math.round(subtotal * 100) - Math.round(pricing.promotionDiscount * 100) - Math.round(pricing.couponDiscount * 100));
+      let red;
+      try {
+        red = computeRedemption({ requestedPoints, balance: buyer?.loyalty?.points, basePiasters });
+      } catch (e) {
+        throw new createError(e.message, 400);
+      }
+      const taken = await User.findOneAndUpdate(
+        { _id: req.user._id, 'loyalty.points': { $gte: red.points } },
+        { $inc: { 'loyalty.points': -red.points, 'loyalty.totalRedeemed': red.points } },
+        { new: true, select: 'loyalty' }
+      ).lean();
+      if (!taken) throw new createError('رصيد النقاط غير كافٍ', 400);
+      pointsTaken = red.points;
+      pointsDiscount = red.discountPiasters / 100;
+      discount = Math.round((discount + pointsDiscount) * 100) / 100;
+      total = Math.round(Math.max(0, total * 100 - red.discountPiasters)) / 100;
+    }
 
     // ── Gift lines from live promotions (price 0, stock reserved like any item) ──
     const giftOrderItems = [];
@@ -271,6 +301,12 @@ export const createOrder = async (req, res, next) => {
       secretCode,
     }]);
     } catch (orderErr) {
+      // The order was not created: give any redeemed points back.
+      if (pointsTaken > 0) {
+        try {
+          await User.findByIdAndUpdate(req.user._id, { $inc: { 'loyalty.points': pointsTaken, 'loyalty.totalRedeemed': -pointsTaken } });
+        } catch (e) { console.error('[CRITICAL] Points refund failed:', req.user._id, pointsTaken, e); }
+      }
       // The order was not created: put the reserved stock back so it is not lost.
       for (const line of stockLines) {
         try { await returnStock(line); } catch (e) { console.error('[CRITICAL] Stock return failed:', line, e); }
@@ -279,6 +315,18 @@ export const createOrder = async (req, res, next) => {
         try { await returnStock(line); } catch (e) { console.error('[CRITICAL] Gift stock return failed:', line, e); }
       }
       throw orderErr;
+    }
+
+    if (pointsTaken > 0) {
+      try {
+        const u = await User.findById(req.user._id).select('loyalty').lean();
+        await LoyaltyTransaction.create({
+          user: req.user._id, type: 'redeemed', points: -pointsTaken, source: 'redemption',
+          referenceId: order._id, referenceModel: 'Order',
+          description: `Points redeemed at checkout (-${pointsDiscount} EGP) on order #${order._id}`,
+          balanceAfter: u?.loyalty?.points ?? 0,
+        });
+      } catch (e) { console.error('[Loyalty] redemption ledger write failed:', order._id, e.message); }
     }
 
     // نحذف السلة فقط لو الطلب اتعمل من السلة فعلاً (مش من "اشترِ الآن")
@@ -397,7 +445,7 @@ export const orderComplete = async (req, res, next) => {
     if (order.buyer) {
       (async () => {
         try {
-          await earnPointsFromOrder(order.buyer.toString(), order._id.toString(), order.total);
+          await earnPointsFromOrder(order.buyer.toString(), order._id.toString(), Math.max(0, (Number(order.total) || 0) - (Number(order.shippingFee) || 0)));
         } catch (err) {
           console.error('[Loyalty] orderComplete — failed to award points:', err);
         }
@@ -496,11 +544,16 @@ export const updateDeliveryStatus = async (req, res, next) => {
     if (oldStatus !== 'delivered' && deliveryStatus === 'delivered' && order.buyer) {
       (async () => {
         try {
-          await earnPointsFromOrder(order.buyer.toString(), order._id.toString(), order.total);
+          await earnPointsFromOrder(order.buyer.toString(), order._id.toString(), Math.max(0, (Number(order.total) || 0) - (Number(order.shippingFee) || 0)));
         } catch (err) {
           console.error('Error awarding loyalty points:', err);
         }
       })();
+    }
+
+    // Give redeemed points back when an order is cancelled before delivery
+    if (deliveryStatus === 'cancelled' && oldStatus !== 'cancelled' && oldStatus !== 'delivered' && order.buyer) {
+      refundRedeemedPointsForOrder(order.buyer.toString(), order._id.toString());
     }
 
     // Take the points back when a delivered order is cancelled/returned
