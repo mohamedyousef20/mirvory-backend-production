@@ -3,6 +3,7 @@ import {
   getUserLoyalty,
   getUserLoyaltyTransactions,
   redeemPoints,
+  getLoyaltyRules,
   adjustPoints,
   getAllUsersLoyalty,
   getAllTransactionsAdmin,
@@ -16,6 +17,7 @@ const router = express.Router();
 // User routes (authenticated)
 router.get('/my-loyalty', protect, getUserLoyalty);
 router.get('/my-loyalty/transactions', protect, getUserLoyaltyTransactions);
+router.get('/rules', getLoyaltyRules);
 router.post('/redeem', protect, redeemPoints);
 
 // Admin routes

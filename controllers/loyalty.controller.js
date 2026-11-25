@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import User from '../models/user.model.js';
 import LoyaltyTransaction from '../models/loyaltyTransaction.model.js';
 import createError from '../utils/error.js';
+import { pointsForAmount, loyaltyRules, EGP_PER_EARNED_POINT } from '../utils/loyaltyMath.js';
 import {
   buildPaginationMeta,
   parsePageParams,
@@ -16,8 +17,6 @@ const EMPTY_LOYALTY = {
 
 const normalizeLoyalty = (loyalty) => ({ ...EMPTY_LOYALTY, ...(loyalty ? loyalty.toObject?.() ?? loyalty : {}) });
 
-// Points earned per EGP spent
-const POINTS_PER_EGP = 1;
 
 // Get user loyalty information (authenticated users only)
 export const getUserLoyalty = async (req, res, next) => {
@@ -71,7 +70,7 @@ export const getUserLoyaltyTransactions = async (req, res, next) => {
 // Earn points from order completion (internal function, can be called from order controller)
 export const earnPointsFromOrder = async (userId, orderId, orderAmount) => {
   try {
-    const pointsToEarn = Math.floor(Number(orderAmount) * POINTS_PER_EGP);
+    const pointsToEarn = pointsForAmount(orderAmount);
     if (!Number.isFinite(pointsToEarn) || pointsToEarn <= 0) return;
 
     // An order may reach "delivered" more than once (status toggled back and
@@ -169,59 +168,43 @@ export const revokePointsFromOrder = async (userId, orderId, reason = 'order_rev
   }
 };
 
-// Redeem points (user)
+// Public loyalty rules (read-only constants, used by the checkout UI for previews).
+export const getLoyaltyRules = (req, res) => {
+  res.status(200).json({ success: true, rules: loyaltyRules() });
+};
+
+// Legacy standalone redeem endpoint: points are now redeemed only at checkout
+// (createOrder, field `redeemPoints`), where the discount is applied server-side.
+// Burning points without a discount would only cost customers, so it is closed.
 export const redeemPoints = async (req, res, next) => {
+  next(new createError('Points are redeemed at checkout', 410));
+};
+
+/** Refund redeemed points when an order is cancelled before delivery (idempotent). */
+export const refundRedeemedPointsForOrder = async (userId, orderId) => {
   try {
-    console.log('iminreedpoint')
-    const points = Number(req.body?.points);
-    const { orderId } = req.body || {};
-
-    if (!Number.isInteger(points) || points <= 0) {
-      throw new createError('Invalid points amount', 400);
-    }
-
-    if (orderId && !mongoose.isValidObjectId(orderId)) {
-      throw new createError('Invalid order id', 400);
-    }
-
-    const before = await User.findById(req.user._id).select('loyalty').lean();
-    if (!before) {
-      throw new createError('User not found', 404);
-    }
-
-    // Conditional update: two concurrent redemptions cannot both pass the
-    // balance check, so the balance can never go negative.
-    const user = await User.findOneAndUpdate(
-      { _id: req.user._id, 'loyalty.points': { $gte: points } },
-      { $inc: { 'loyalty.points': -points, 'loyalty.totalRedeemed': points } },
+    const redeemed = await LoyaltyTransaction.findOne({
+      user: userId, source: 'redemption', type: 'redeemed', referenceId: orderId,
+    }).lean();
+    if (!redeemed) return;
+    const refunded = await LoyaltyTransaction.exists({
+      user: userId, source: 'redemption', type: 'adjusted', referenceId: orderId,
+    });
+    if (refunded) return;
+    const pts = Math.abs(redeemed.points);
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { $inc: { 'loyalty.points': pts, 'loyalty.totalRedeemed': -pts } },
       { new: true, select: 'loyalty' }
     ).lean();
-
-    if (!user) {
-      throw new createError('Insufficient points balance', 400);
-    }
-
-    const loyalty = normalizeLoyalty(user.loyalty);
-    // Create transaction record
     await LoyaltyTransaction.create({
-      user: req.user._id,
-      type: 'redeemed',
-      points: -points,
-      source: 'redemption',
-      referenceId: orderId || null,
-      referenceModel: 'Order',
-      description: `Points redeemed for discount`,
-      balanceAfter: loyalty.points,
-    });
-
-    res.status(200).json({
-      success: true,
-      message: 'Points redeemed successfully',
-      pointsRedeemed: points,
-      remainingPoints: loyalty.points,
+      user: userId, type: 'adjusted', points: pts, source: 'redemption',
+      referenceId: orderId, referenceModel: 'Order',
+      description: `Points refunded: order #${orderId} cancelled`,
+      balanceAfter: normalizeLoyalty(user?.loyalty).points,
     });
   } catch (error) {
-    next(error);
+    console.error('Error refunding redeemed points:', error);
   }
 };
 
@@ -343,7 +326,7 @@ export const getLoyaltyStats = async (req, res, next) => {
         totalPointsEarned: userStats?.totalPointsEarned ?? 0,
         totalPointsRedeemed: userStats?.totalPointsRedeemed ?? 0,
         totalPointsAvailable: userStats?.totalPointsAvailable ?? 0,
-        pointsPerEgp: POINTS_PER_EGP,
+        pointsPerEgp: 1 / EGP_PER_EARNED_POINT,
       },
     });
   } catch (error) {
