@@ -1,4 +1,5 @@
 // controllers/guestOrder.controller.js
+import { prepaidDiscountPiasters } from '../utils/prepaid.js';
 import crypto from 'crypto';
 import mongoose from 'mongoose';
 import Order from '../models/order.model.js';
@@ -268,6 +269,13 @@ export const createGuestOrder = async (req, res, next) => {
       subtotal + shippingFee
     );
 
+    // Prepaid discount (InstaPay / wallet transfer): flat amount off the merchandise, never off shipping.
+    const prepaidDiscount = prepaidDiscountPiasters(
+      paymentMethod,
+      Math.round(total * 100) - Math.round(shippingFee * 100)
+    ) / 100;
+    if (prepaidDiscount > 0) total = Math.round(total * 100 - prepaidDiscount * 100) / 100;
+
     // ── 9. Create guest sentinel buyer ───────────────────────────────
     let guestSentinelId;
 
@@ -318,7 +326,8 @@ export const createGuestOrder = async (req, res, next) => {
       },
 
       subtotal,
-      discount: 0,
+      discount: prepaidDiscount,
+      prepaidDiscount,
       shippingFee,
       total,
 
@@ -418,6 +427,16 @@ export const trackGuestOrder = async (req, res, next) => {
       .lean();
 
     if (!guestRecord) throw new createError('لم يتم العثور على طلب بهذا الرمز', 404);
+
+    // The courier who will deliver the parcel: name and phone only, so the customer can reach them.
+    // (Fetched on its own so the rest of the shipment data keeps its current projection.)
+    if (guestRecord.order?._id) {
+      const ca = await Order.findById(guestRecord.order._id).select('shipment.courierAgent').lean();
+      const agent = ca?.shipment?.courierAgent;
+      if (agent?.name || agent?.phone) {
+        guestRecord.order.shipment = { ...(guestRecord.order.shipment || {}), courierAgent: { name: agent.name || null, phone: agent.phone || null } };
+      }
+    }
 
     return res.status(200).json({
       success: true,
