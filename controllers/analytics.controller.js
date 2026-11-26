@@ -9,6 +9,53 @@ import Product from '../models/product.model.js';
 import User from '../models/user.model.js';
 import mongoose from 'mongoose';
 
+// ─── Governorate roll-up ─────────────────────────────────────────────────────
+// Orders store the address as "street, city, governorate". Group by the governorate, never by street.
+const GOVERNORATES = [
+  'القاهرة', 'الجيزة', 'الإسكندرية', 'القليوبية', 'الشرقية', 'الدقهلية', 'الغربية', 'المنوفية', 'كفر الشيخ',
+  'البحيرة', 'دمياط', 'بورسعيد', 'الإسماعيلية', 'السويس', 'شمال سيناء', 'جنوب سيناء', 'الفيوم', 'بني سويف',
+  'المنيا', 'أسيوط', 'سوهاج', 'قنا', 'الأقصر', 'أسوان', 'البحر الأحمر', 'مطروح', 'الوادي الجديد',
+];
+const normAr = (t) => String(t || '')
+  .replace(/[\u064B-\u0652\u0640]/g, '')
+  .replace(/[أإآ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه')
+  .replace(/\s+/g, ' ').trim().toLowerCase();
+const stripAl = (t) => t.replace(/^ال/, '');
+const GOV_KEYS = GOVERNORATES.map((g) => ({ name: g, key: stripAl(normAr(g)) }));
+const UNKNOWN_GOV = 'غير محدد';
+export const governorateOf = (address) => {
+  const parts = String(address || '').split(/[,،\n]/).map(normAr).filter(Boolean);
+  const bare = parts.map(stripAl);
+  // 1) the last segment is the governorate in the checkout format
+  for (let i = bare.length - 1; i >= 0; i--) {
+    const hit = GOV_KEYS.find((g) => bare[i] === g.key);
+    if (hit) return hit.name;
+  }
+  // 2) a segment that starts with the governorate name (e.g. "جيزة فيصل")
+  for (let i = bare.length - 1; i >= 0; i--) {
+    const hit = GOV_KEYS.find((g) => bare[i].startsWith(g.key + ' ') || bare[i].endsWith(' ' + g.key));
+    if (hit) return hit.name;
+  }
+  return UNKNOWN_GOV;
+};
+const rollUpGovernorates = (rows) => {
+  const m = new Map();
+  for (const r of rows) {
+    const gov = governorateOf(r._id);
+    const g = m.get(gov) || { _id: gov, governorate: gov, ordersCount: 0, revenue: 0, delivered: 0, cancelled: 0, buyers: new Set() };
+    g.ordersCount += r.ordersCount; g.revenue += r.revenue || 0; g.delivered += r.delivered; g.cancelled += r.cancelled;
+    (r.uniqueBuyers || []).forEach((b) => g.buyers.add(String(b)));
+    m.set(gov, g);
+  }
+  return [...m.values()].map((g) => ({
+    _id: g._id, governorate: g.governorate, ordersCount: g.ordersCount, revenue: g.revenue,
+    avgOrder: g.ordersCount ? g.revenue / g.ordersCount : 0, delivered: g.delivered, cancelled: g.cancelled,
+    customerCount: g.buyers.size,
+    completionRate: g.ordersCount ? (g.delivered / g.ordersCount) * 100 : 0,
+    rejectionRate: g.ordersCount ? (g.cancelled / g.ordersCount) * 100 : 0,
+  })).sort((a, b) => b.revenue - a.revenue).slice(0, 50);
+};
+
 // ─── Date Helpers ────────────────────────────────────────────────────────────
 
 function buildDateRange(period, from, to) {
@@ -313,51 +360,17 @@ export const getFullAdminAnalytics = async (req, res) => {
     // ── 7. Governorate analysis ───────────────────────────────────────────────
     // Extract governorate from deliveryInfo.address (first segment before comma or full field)
     const governoratePipeline = [
-      { $match: { ...currMatch, 'deliveryInfo.address': { $exists: true, $ne: null } } },
-      {
-        $addFields: {
-          gov: {
-            $trim: {
-              input: {
-                $arrayElemAt: [{ $split: ['$deliveryInfo.address', ','] }, 0]
-              }
-            }
-          }
-        }
-      },
-      { $match: { gov: { $exists: true, $ne: '' } } },
+      { $match: { ...currMatch, 'deliveryInfo.address': { $exists: true, $nin: [null, ''] } } },
       {
         $group: {
-          _id: '$gov',
+          _id: '$deliveryInfo.address',
           ordersCount: { $sum: 1 },
           revenue: { $sum: '$total' },
-          avgOrder: { $avg: '$total' },
           delivered: { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'delivered'] }, 1, 0] } },
           cancelled: { $sum: { $cond: [{ $eq: ['$deliveryStatus', 'cancelled'] }, 1, 0] } },
           uniqueBuyers: { $addToSet: '$buyer' },
         }
       },
-      {
-        $project: {
-          governorate: '$_id',
-          ordersCount: 1,
-          revenue: 1,
-          avgOrder: 1,
-          delivered: 1,
-          cancelled: 1,
-          customerCount: { $size: '$uniqueBuyers' },
-          completionRate: {
-            $cond: [{ $gt: ['$ordersCount', 0] },
-            { $multiply: [{ $divide: ['$delivered', '$ordersCount'] }, 100] }, 0]
-          },
-          rejectionRate: {
-            $cond: [{ $gt: ['$ordersCount', 0] },
-            { $multiply: [{ $divide: ['$cancelled', '$ordersCount'] }, 100] }, 0]
-          },
-        }
-      },
-      { $sort: { revenue: -1 } },
-      { $limit: 50 }
     ];
 
     // ── 8. Payment method breakdown ───────────────────────────────────────────
@@ -537,7 +550,7 @@ export const getFullAdminAnalytics = async (req, res) => {
       productPerf,
       sizeAnalysis,
       colorAnalysis,
-      governorateAnalysis,
+      governorateRaw,
       paymentBreakdown,
       topCustomers,
       detailedOrders,
@@ -556,6 +569,8 @@ export const getFullAdminAnalytics = async (req, res) => {
       Order.aggregate(detailedOrdersPipeline),
       Order.aggregate(shippingPipeline),
     ]);
+
+    const governorateAnalysis = rollUpGovernorates(governorateRaw);
 
     const curr = kpiCurr[0] || {};
     const prev = kpiPrev[0] || {};
