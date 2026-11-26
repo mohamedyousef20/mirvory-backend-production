@@ -409,7 +409,7 @@ export const trackGuestOrder = async (req, res, next) => {
       .select('guestName order createdAt')
       .populate({
         path: 'order',
-        select: 'orderNumber deliveryStatus paymentStatus total deliveryMethod deliveryInfo.fullName deliveryInfo.address items createdAt shipment.courier shipment.waybillNumber shipment.currentStatus shipment.currentStation shipment.events shipment.lastCheckedAt',
+        select: 'orderNumber paymentMethod paymentStatus deliveryStatus paymentProof.uploadedAt total deliveryMethod deliveryInfo.fullName deliveryInfo.address items createdAt shipment.courier shipment.waybillNumber shipment.currentStatus shipment.currentStation shipment.events shipment.lastCheckedAt',
         populate: {
           path: 'items.product',
           select: 'title',

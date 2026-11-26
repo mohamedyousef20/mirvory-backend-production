@@ -492,7 +492,7 @@ export const updatePayment = async (req, res, next) => {
 
     const { orderId, paymentStatus } = req.body;
     if (!isValidObjectId(orderId)) throw new createError("ID غير صالح", 400);
-    if (!['pending', 'paid', 'failed'].includes(paymentStatus)) throw new createError("حالة دفع غير صالحة", 400);
+    if (!['pending', 'under_review', 'paid', 'failed'].includes(paymentStatus)) throw new createError("حالة دفع غير صالحة", 400);
 
     const order = await Order.findById(orderId);
     if (!order) throw new createError("الطلب غير موجود", 404);

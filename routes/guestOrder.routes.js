@@ -2,6 +2,8 @@
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import { createGuestOrder, trackGuestOrder, lookupGuestOrder, linkGuestOrderToAccount } from '../controllers/guestOrder.controller.js';
+import { uploadSingleImage } from '../middlewares/upload.js';
+import { getPaymentInfo, uploadGuestPaymentProof } from '../controllers/manualPayment.controller.js';
 import { protect } from '../middlewares/auth.js';
 
 const router = express.Router();
@@ -36,5 +38,11 @@ router.post('/lookup', trackLimiter, lookupGuestOrder);
 
 // POST /api/guest-orders/link-account — link guest order to authenticated account
 router.post('/link-account', protect, linkGuestOrderToAccount);
+
+// GET /api/guest-orders/payment-info: payee details for InstaPay / wallet (public)
+router.get('/payment-info', getPaymentInfo);
+
+// POST /api/guest-orders/payment-proof: guest uploads a transfer receipt (order number + phone)
+router.post('/payment-proof', trackLimiter, uploadSingleImage, uploadGuestPaymentProof);
 
 export default router;
