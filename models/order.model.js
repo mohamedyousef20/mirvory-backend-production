@@ -79,8 +79,11 @@ const orderSchema = new mongoose.Schema({
     address: { type: String },
     pickupPoint: { type: mongoose.Schema.Types.ObjectId, ref: "PickupPoint" }
   },
-  paymentMethod: { type: String, enum: ["cash", "card"], default: "cash" },
-  paymentStatus: { type: String, enum: ["pending", "paid", "failed"], default: "pending" },
+  paymentMethod: { type: String, enum: ["cash", "card", "instapay", "wallet"], default: "cash" },
+  paymentStatus: { type: String, enum: ["pending", "under_review", "paid", "failed"], default: "pending" },
+  // Receipt image for manual InstaPay / wallet transfers (uploaded by the customer, confirmed by an admin)
+  // publicId is private (select: false); it is only read by the admin receipt endpoint.
+  paymentProof: { publicId: { type: String, default: null, select: false }, uploadedAt: { type: Date, default: null } },
   payoutDate: Date, paymentData: mongoose.Schema.Types.Mixed,
   subtotal: Number, discount: Number, shippingFee: Number, total: Number,
   coupon: { code: String, discountAmount: Number, originalTotal: Number, discountedTotal: Number },
