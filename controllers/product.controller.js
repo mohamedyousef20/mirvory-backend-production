@@ -179,6 +179,17 @@ export const updateProduct = async (req, res, next) => {
       }
     });
 
+    // Product video link (YouTube). Empty string clears it. Only http(s) links are accepted.
+    if (parsedUpdates.videoUrl !== undefined && parsedUpdates.videoUrl !== null) {
+      const nextVideoUrl = String(parsedUpdates.videoUrl).trim();
+      if (nextVideoUrl) {
+        let okUrl = false;
+        try { okUrl = ['http:', 'https:'].includes(new URL(nextVideoUrl).protocol); } catch { okUrl = false; }
+        if (!okUrl) throw new createError('رابط الفيديو غير صالح', 400);
+      }
+      product.videoUrl = nextVideoUrl;
+    }
+
     // Set reapproval status for non-admin updates
     const requiresReapproval = req.user.role !== 'admin' && req.user.role !== 'super_admin';
     if (requiresReapproval) {
