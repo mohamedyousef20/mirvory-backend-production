@@ -86,6 +86,8 @@ const orderSchema = new mongoose.Schema({
   paymentProof: { publicId: { type: String, default: null, select: false }, uploadedAt: { type: Date, default: null } },
   payoutDate: Date, paymentData: mongoose.Schema.Types.Mixed,
   subtotal: Number, discount: Number, shippingFee: Number, total: Number,
+  // Flat discount for paying in advance (already included in `discount` and `total`)
+  prepaidDiscount: { type: Number, default: 0 },
   coupon: { code: String, discountAmount: Number, originalTotal: Number, discountedTotal: Number },
   // Snapshot of the promotions that were re-verified and applied at checkout.
   // Kept on the order so historical transactions stay readable forever.

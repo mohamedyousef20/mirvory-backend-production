@@ -1,4 +1,5 @@
 import Order from '../models/order.model.js';
+import { prepaidDiscountPiasters } from '../utils/prepaid.js';
 import Product from '../models/product.model.js';
 import User from '../models/user.model.js';
 import Cart from '../models/cart.model.js';
@@ -211,6 +212,16 @@ export const createOrder = async (req, res, next) => {
       total = Math.round(Math.max(0, total * 100 - red.discountPiasters)) / 100;
     }
 
+    // ── Prepaid discount (InstaPay / wallet transfer): flat amount off the merchandise ──
+    const prepaidDiscount = prepaidDiscountPiasters(
+      paymentMethod,
+      Math.round(total * 100) - Math.round(shippingFee * 100)
+    ) / 100;
+    if (prepaidDiscount > 0) {
+      discount = Math.round((discount + prepaidDiscount) * 100) / 100;
+      total = Math.round(total * 100 - prepaidDiscount * 100) / 100;
+    }
+
     // ── Gift lines from live promotions (price 0, stock reserved like any item) ──
     const giftOrderItems = [];
     const giftStockLines = [];
@@ -289,7 +300,7 @@ export const createOrder = async (req, res, next) => {
         address: deliveryMethod === "home" ? deliveryInfo.address : undefined,
         pickupPoint: deliveryMethod === "pickup" ? deliveryInfo.pickupPoint : undefined,
       },
-      subtotal, discount, shippingFee, total,
+      subtotal, discount, shippingFee, total, prepaidDiscount,
       coupon: appliedCoupon,
       promotions: {
         discount: pricing.promotionDiscount,

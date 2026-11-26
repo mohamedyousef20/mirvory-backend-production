@@ -1,5 +1,6 @@
 // Manual payment (no payment provider): the customer transfers by InstaPay or Vodafone Cash,
 // uploads a receipt image, and an admin confirms the payment from the dashboard.
+import { prepaidDiscountEgp } from '../utils/prepaid.js';
 import Order from '../models/order.model.js';
 import GuestOrder from '../models/guestOrder.model.js';
 import { MAX_RECEIPT_BYTES, detectImageType, uploadReceipt, fetchReceiptBytes, deleteReceipt } from '../utils/receiptStorage.js';
@@ -11,6 +12,7 @@ import mongoose from 'mongoose';
 
 // Payee details live here only. Override them with env vars on the server, no code change needed.
 export const getPaymentInfoData = () => ({
+  prepaidDiscount: prepaidDiscountEgp(),
   instapay: {
     link: process.env.INSTAPAY_LINK || 'https://ipn.eg/S/mohamed_yousef_leba/instapay/3xzUQZ',
     address: process.env.INSTAPAY_ADDRESS || 'mohamed_yousef_leba@instapay',
