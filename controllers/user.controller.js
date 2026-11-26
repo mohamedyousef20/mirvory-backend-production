@@ -582,7 +582,7 @@ export const getMe = async (req, res, next) => {
   try {
     if (!req.user?.id) return next(new createError("غير مصرح", 401));
 
-    const user = await User.findById(req.user.id).select("-password -verificationCode -passwordResetCode").lean();
+    const user = await User.findById(req.user.id).select("-password -verificationCode -passwordResetCode -refreshTokens -loginHistory -passwordResetVerified").lean();
     if (!user) return next(new createError("المستخدم غير موجود", 404));
 
     res.status(200).json({ success: true, data: user });
