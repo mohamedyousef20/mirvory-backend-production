@@ -1,7 +1,7 @@
 // routes/guestOrder.routes.js
 import express from 'express';
 import rateLimit from 'express-rate-limit';
-import { createGuestOrder, trackGuestOrder, linkGuestOrderToAccount } from '../controllers/guestOrder.controller.js';
+import { createGuestOrder, trackGuestOrder, lookupGuestOrder, linkGuestOrderToAccount } from '../controllers/guestOrder.controller.js';
 import { protect } from '../middlewares/auth.js';
 
 const router = express.Router();
@@ -30,6 +30,9 @@ router.post('/', createGuestOrder);
 
 // GET /api/guest-orders/track/:token — track a guest order
 router.get('/track/:token', trackGuestOrder);
+
+// POST /api/guest-orders/lookup — recover a lost tracking token (phone + order number)
+router.post('/lookup', trackLimiter, lookupGuestOrder);
 
 // POST /api/guest-orders/link-account — link guest order to authenticated account
 router.post('/link-account', protect, linkGuestOrderToAccount);
