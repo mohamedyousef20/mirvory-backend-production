@@ -457,3 +457,24 @@ export const linkGuestOrderToAccount = async (req, res, next) => {
     next(err);
   }
 };
+
+// ─────────────────────────────────────────────
+// POST /api/guest-orders/lookup  { phone, orderNumber }
+// Recover a lost tracking token: both the phone used at checkout and the order number must match.
+// ─────────────────────────────────────────────
+export const lookupGuestOrder = async (req, res, next) => {
+  try {
+    const phone = String(req.body?.phone || '').replace(/\D/g, '').slice(-10);
+    const orderNumber = String(req.body?.orderNumber || '').trim().replace(/^#/, '');
+    if (phone.length < 10 || !orderNumber) throw new createError('رقم الموبايل ورقم الطلب مطلوبين', 400);
+
+    const order = await Order.findOne({ orderNumber }).select('_id').lean();
+    const guestRecord = order ? await GuestOrder.findOne({ order: order._id }).select('guestPhone trackingToken').lean() : null;
+    const stored = String(guestRecord?.guestPhone || '').replace(/\D/g, '').slice(-10);
+    if (!guestRecord || stored !== phone) throw new createError('مفيش طلب بالبيانات دي', 404);
+
+    return res.status(200).json({ success: true, trackingToken: guestRecord.trackingToken });
+  } catch (err) {
+    next(err);
+  }
+};
