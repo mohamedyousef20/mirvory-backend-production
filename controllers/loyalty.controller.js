@@ -168,6 +168,50 @@ export const revokePointsFromOrder = async (userId, orderId, reason = 'order_rev
   }
 };
 
+/**
+ * Takes back the points earned on a returned item when an admin approves a return request.
+ * Partial: only the points that belong to the returned item (1 point per 5 EGP of its value).
+ * Idempotent per return request. Never goes below zero and never takes more than the order earned.
+ */
+export const revokePointsForReturn = async (userId, orderId, returnId, itemAmountEgp) => {
+  try {
+    const earned = await LoyaltyTransaction.findOne({ user: userId, source: 'order_completion', referenceId: orderId }).lean();
+    if (!earned) return; // points were never granted (order not delivered, guest, or too small)
+
+    const done = await LoyaltyTransaction.exists({ user: userId, source: 'manual_adjustment', referenceId: returnId, type: 'adjusted' });
+    if (done) return;
+
+    const wanted = Math.min(pointsForAmount(itemAmountEgp), earned.points);
+    if (wanted <= 0) return;
+
+    const before = await User.findById(userId).select('loyalty').lean();
+    if (!before) return;
+    const current = normalizeLoyalty(before.loyalty);
+    const pointsToRevoke = Math.min(wanted, current.points);
+    const earnedToRemove = Math.min(wanted, current.totalEarned);
+    if (pointsToRevoke <= 0 && earnedToRemove <= 0) return;
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { $inc: { 'loyalty.points': -pointsToRevoke, 'loyalty.totalEarned': -earnedToRemove } },
+      { new: true, select: 'loyalty' }
+    ).lean();
+
+    await LoyaltyTransaction.create({
+      user: userId,
+      type: 'adjusted',
+      points: -pointsToRevoke,
+      source: 'manual_adjustment',
+      referenceId: returnId,
+      referenceModel: 'ReturnRequest',
+      description: `Points reversed for approved return ${returnId} (order #${orderId})`,
+      balanceAfter: normalizeLoyalty(user?.loyalty).points,
+    });
+  } catch (error) {
+    console.error('Error revoking points for return:', error);
+  }
+};
+
 // Public loyalty rules (read-only constants, used by the checkout UI for previews).
 export const getLoyaltyRules = (req, res) => {
   res.status(200).json({ success: true, rules: loyaltyRules() });

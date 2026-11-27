@@ -55,13 +55,13 @@ const loyaltyTransactionSchema = new mongoose.Schema({
   // Tier before and after (if changed)
   tierBefore: {
     type: String,
-    enum: ['bronze', 'silver', 'gold', 'platinum'],
+    enum: ['bronze', 'silver', 'gold', 'platinum', null], // null = no tier (points-only system)
     default: null
   },
 
   tierAfter: {
     type: String,
-    enum: ['bronze', 'silver', 'gold', 'platinum'],
+    enum: ['bronze', 'silver', 'gold', 'platinum', null], // null = no tier (points-only system)
     default: null
   },
 
