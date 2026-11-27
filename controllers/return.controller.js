@@ -5,6 +5,7 @@ import User from '../models/user.model.js';
 import { createNotifications } from '../utils/notification.js';
 import mongoose from 'mongoose';
 import createError from '../utils/error.js';
+import { revokePointsForReturn } from './loyalty.controller.js';
 import {
   buildPaginationMeta,
   parsePageParams,
@@ -100,6 +101,21 @@ export const createReturnRequest = async (req, res, next) => {
     });
 
     await returnRequest.save();
+
+    // An approved (or later processed) refund takes back the loyalty points earned on that item.
+    // Exchanges keep their points. Safe to repeat: one reversal per return request.
+    if ((status === 'approved' || status === 'processed') && returnRequest.type === 'return') {
+      (async () => {
+        try {
+          const order = await Order.findById(returnRequest.order).select('items').lean();
+          const line = order?.items?.find((i) => String(i._id) === String(returnRequest.item));
+          const value = Number(returnRequest.refundAmount) > 0
+            ? Number(returnRequest.refundAmount)
+            : (Number(line?.price) || 0) * (Number(line?.quantity) || 1);
+          await revokePointsForReturn(returnRequest.user.toString(), returnRequest.order.toString(), returnRequest._id.toString(), value);
+        } catch (err) { console.error('Return points revoke failed:', err); }
+      })();
+    }
 
     (async () => {
       try {
