@@ -12,6 +12,9 @@ import { withStableTiebreaker } from '../utils/pagination.js';
 // ==========================================
 // 🛠 HELPER FUNCTIONS
 // ==========================================
+const refreshSecret = () => process.env.REFRESH_SECRET || process.env.JWT_SECRET;
+const refreshLifetime = () => process.env.JWT_REFRESH_EXPIRE || '7d';
+
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 // دالة تحويل صيغ الوقت النصية إلى ميلي ثانية لمنع دمج النصوص
@@ -221,14 +224,14 @@ export const login = async (req, res, next) => {
 
     const refreshToken = jwt.sign(
       { id: user._id, version: Date.now() },
-      process.env.JWT_SECRET,
+      refreshSecret(),
       {
-        expiresIn: process.env.JWT_REFRESH_EXPIRE || '30d',
+        expiresIn: refreshLifetime(),
       }
     );
 
     // 🔄 TOKEN ROTATION: Store refresh token in user document
-    const refreshTokenExpiry = new Date(Date.now() + parseDurationToMs(process.env.JWT_REFRESH_EXPIRE));
+    const refreshTokenExpiry = new Date(Date.now() + parseDurationToMs(refreshLifetime()));
     user.refreshTokens = user.refreshTokens || [];
     user.refreshTokens.push({
       token: refreshToken,
@@ -278,11 +281,15 @@ export const logout = async (req, res, next) => {
   try {
     const refreshToken = req.cookies.refreshToken;
 
-    // 🧹 CLEAR REFRESH TOKEN: Remove from user document if exists
-    if (refreshToken && req.user?._id) {
-      await User.findByIdAndUpdate(req.user._id, {
-        $pull: { refreshTokens: { token: refreshToken } }
-      });
+    if (refreshToken) {
+      try {
+        const decoded = jwt.verify(refreshToken, refreshSecret());
+        await User.findByIdAndUpdate(decoded.id, {
+          $pull: { refreshTokens: { token: refreshToken } }
+        });
+      } catch (err) {
+        if (!['TokenExpiredError', 'JsonWebTokenError'].includes(err.name)) throw err;
+      }
     }
 
     const isProduction = process.env.NODE_ENV === "production";
@@ -303,50 +310,27 @@ export const refreshToken = async (req, res, next) => {
     const refreshToken = req.cookies.refreshToken;
     if (!refreshToken) return next(new createError("No refresh token", 401));
 
-    const decoded = jwt.verify(refreshToken, process.env.REFRESH_SECRET);
+    const decoded = jwt.verify(refreshToken, refreshSecret());
     const user = await User.findById(decoded.id).select('+refreshTokens');
 
     if (!user || !user.isActive) return next(new createError("المستخدم غير موجود أو موقوف", 401));
 
-    // 🔐 VERIFY TOKEN: Check if refresh token exists in user's stored tokens
+    // A refresh credential is valid only while signed, stored, unexpired and active.
     const storedToken = user.refreshTokens?.find(rt => rt.token === refreshToken);
-    if (!storedToken) {
+    if (!storedToken || !(new Date(storedToken.expiresAt).getTime() > Date.now())) {
       return next(new createError("Invalid refresh token", 401));
     }
 
-    // 🧹 CLEANUP: Remove expired tokens
-    user.refreshTokens = user.refreshTokens?.filter(rt => rt.expiresAt > new Date()) || [];
-
-    // 🔄 TOKEN ROTATION: Generate new tokens
     const newAccessToken = jwt.sign(
       { id: user._id, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRE || "1d" }
     );
-
-    const newRefreshToken = jwt.sign(
-      { id: user._id, version: Date.now() },
-      process.env.REFRESH_SECRET,
-      {
-        expiresIn: process.env.JWT_REFRESH_EXPIRE,
-      }
-    );
-
-    // 🔄 ROTATION: Remove old token and add new one
-    user.refreshTokens = user.refreshTokens.filter(rt => rt.token !== refreshToken);
-    const newRefreshTokenExpiry = new Date(Date.now() + parseDurationToMs(process.env.JWT_REFRESH_EXPIRE));
-    user.refreshTokens.push({
-      token: newRefreshToken,
-      createdAt: new Date(),
-      expiresAt: newRefreshTokenExpiry
-    });
-
-    // 🧹 LIMIT: Keep max 5 refresh tokens
-    if (user.refreshTokens.length > 5) {
-      user.refreshTokens = user.refreshTokens.slice(-5);
-    }
-
-    await user.save({ validateModifiedOnly: true });
+    // Keep this device's refresh credential until its original expiry. Parallel
+    // tabs/requests cannot invalidate one another, and renewal never extends it.
+    const remainingMs = Math.max(0, Math.min(
+      decoded.exp * 1000, new Date(storedToken.expiresAt).getTime()
+    ) - Date.now());
 
     // 🍪 SECURE COOKIES: Set new cookies
     const isProduction = process.env.NODE_ENV === "production";
@@ -358,22 +342,22 @@ export const refreshToken = async (req, res, next) => {
       path: '/'
     });
 
-    res.cookie("refreshToken", newRefreshToken, {
+    res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "none" : "lax",
-      maxAge: Number(process.env.COOKIE_REFRESH_EXPIRE) || 7 * 24 * 60 * 60 * 1000,
+      maxAge: remainingMs,
       path: '/'
     });
 
     // 🔄 Return new access token in response body for middleware auto-refresh
-    return res.status(200).json({ success: true, accessToken: newAccessToken });
+    return res.status(200).json({ success: true, accessToken: newAccessToken, refreshToken });
   } catch (err) {
     console.error("REFRESH_TOKEN_ERROR:", err);
     if (err.name === 'TokenExpiredError' || err.name === 'JsonWebTokenError') {
       return next(new createError("Invalid or expired refresh token", 401));
     }
-    next(new createError("Token refresh failed", 401));
+    next(new createError("Token refresh temporarily unavailable", 503));
   }
 };
 
@@ -880,13 +864,13 @@ export const googleAuth = async (req, res, next) => {
 
     const refreshToken = jwt.sign(
       { id: user._id, version: Date.now() },
-      process.env.REFRESH_SECRET,
-      { expiresIn: "7d" }
+      refreshSecret(),
+      { expiresIn: refreshLifetime() }
     );
 
     // 🔄 TOKEN ROTATION: Store refresh token in user document
     // FIX: use parseDurationToMs to avoid string concatenation → Invalid Date
-    const refreshTokenExpiry = new Date(Date.now() + parseDurationToMs(process.env.JWT_REFRESH_EXPIRE || '7d'));
+    const refreshTokenExpiry = new Date(Date.now() + parseDurationToMs(refreshLifetime()));
     user.refreshTokens = user.refreshTokens || [];
     user.refreshTokens.push({
       token: refreshToken,
@@ -947,7 +931,7 @@ export const setSocialCookies = async (req, res, next) => {
       jwt.verify(accessToken, process.env.JWT_SECRET);
 
       // التحقق من صلاحية وتوقيع Refresh Token
-      jwt.verify(refreshToken, process.env.REFRESH_SECRET);
+      jwt.verify(refreshToken, refreshSecret());
     } catch (jwtError) {
       // في حال فشل التحقق (توكن مزور، تالف، أو منتهي الصلاحية) يتم رفض الطلب فوراً
       console.error("JWT Verification failed in setSocialCookies:", jwtError.message);
