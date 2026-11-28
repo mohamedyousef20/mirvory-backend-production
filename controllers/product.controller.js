@@ -1,3 +1,5 @@
+import Category from '../models/category.model.js';
+import { productEditFields } from '../utils/productEdit.js';
 import Product from '../models/product.model.js';
 import User from '../models/user.model.js';
 import mongoose from 'mongoose';
@@ -134,50 +136,29 @@ export const updateProduct = async (req, res, next) => {
       }
     });
 
-    // v5: colors carry their own image + sizes + stock. Replacing `colors` replaces all of them,
-    // so the form must send every color it wants to keep (with its sizes).
+    const isAdminEditor = ['admin', 'super_admin'].includes(req.user.role);
+    const fields = productEditFields(parsedUpdates, isAdminEditor);
+    if (parsedUpdates.category !== undefined) {
+      if (!isValidObjectId(parsedUpdates.category) || !await Category.exists({ _id: parsedUpdates.category })) {
+        throw new createError('القسم المحدد غير موجود', 400);
+      }
+      fields.category = parsedUpdates.category;
+    }
     if (parsedUpdates.colors !== undefined) {
-      const newColors = normalizeColors(parsedUpdates.colors);
-
-      // Delete from Cloudinary only the color images that are no longer used by any color
-      const stillUsed = new Set(newColors.map(c => c.image));
-      const orphaned = (product.colors || []).map(c => c.image).filter(img => img && !stillUsed.has(img));
-      const requestedDeletes = Array.isArray(parsedUpdates.deletedColorImages) ? parsedUpdates.deletedColorImages : [];
-      const toDelete = [...new Set([...orphaned, ...requestedDeletes.filter(img => !stillUsed.has(img))])];
-
-      for (const imageUrl of toDelete) {
-        try {
-          const fileName = imageUrl.split('/').pop();
-          const publicId = fileName.split('.')[0];
-          await cloudinary.uploader.destroy(`mirvory/${publicId}`);
-        } catch (error) {
-          console.error(`Failed to delete color image ${imageUrl}:`, error);
-        }
-      }
-
-      product.colors = newColors;
-      product.needsStockReview = false; // the seller/admin just entered real per-size stock
+      product.colors = normalizeColors(parsedUpdates.colors);
+      product.needsStockReview = false;
+      // Do not destroy image assets while editing: another product may use them,
+      // and a later validation/database failure must leave the original intact.
     }
-
-    // Update price and discount
-    if (parsedUpdates.price !== undefined || parsedUpdates.discountPercentage !== undefined) {
-      const price = parsedUpdates.price !== undefined ? parseFloat(parsedUpdates.price) : product.price;
-      const discountPercentage = parsedUpdates.discountPercentage !== undefined ? parseFloat(parsedUpdates.discountPercentage) : product.discountPercentage;
-      product.price = price;
-      product.discountPercentage = discountPercentage;
-      product.discountedPrice = price - (price * (discountPercentage / 100));
-    }
-
-    // Update other fields
-    const allowedUpdates = ['title', 'description', 'category', 'isFeatured', 'sellerPercentage', 'brand', 'tags', 'isTrusted'];
-    allowedUpdates.forEach(key => {
-      if (parsedUpdates[key] !== undefined) {
-        if (key === 'sellerPercentage') product[key] = parseFloat(parsedUpdates[key]);
-        else if (key === 'isFeatured' || key === 'isTrusted') product[key] = (parsedUpdates[key] === 'true' || parsedUpdates[key] === true);
-        else if (key === 'tags' && typeof parsedUpdates[key] === 'string') product[key] = parsedUpdates[key].split(',').map(t => t.trim());
-        else product[key] = parsedUpdates[key];
+    Object.assign(product, fields);
+    if (isAdminEditor) {
+      if (fields.status === 'deleted' || fields.status === 'pending' || fields.isApproved === false) {
+        product.isApproved = false;
+        if (product.status !== 'deleted') product.status = 'pending';
+      } else if (fields.isApproved === true) {
+        product.status = 'available';
       }
-    });
+    }
 
     // Product video link (YouTube). Empty string clears it. Only http(s) links are accepted.
     if (parsedUpdates.videoUrl !== undefined && parsedUpdates.videoUrl !== null) {
@@ -606,4 +587,15 @@ export const getProductsByCategory = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+};
+// Admin editor must also be able to load a soft-deleted product for restoration.
+export const getProductForAdminEdit = async (req, res, next) => {
+  try {
+    if (!isValidObjectId(req.params.id)) throw new createError('معرف المنتج غير صالح', 400);
+    const product = await Product.findById(req.params.id)
+      .populate('seller', 'firstName lastName vendorProfile.storeName')
+      .populate('category', '_id name').lean();
+    if (!product) throw new createError('المنتج غير موجود', 404);
+    res.json({ success: true, product: toClientProduct(product) });
+  } catch (error) { next(error); }
 };
