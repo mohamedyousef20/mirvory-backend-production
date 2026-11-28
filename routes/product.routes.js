@@ -1,6 +1,7 @@
 import express from 'express';
 import {
   createProduct,
+  getProductForAdminEdit,
   getProducts,
   getProductsByCategory,
   getProductById,
@@ -39,6 +40,7 @@ const router = express.Router();
 
 
 // مسارات المسؤول
+router.get('/admin-edit/:id', protect, isAdmin, getProductForAdminEdit);
 router.get('/admin-products', protect, isAdmin, paginate(12), sort(), buildFilter(commonFilters.product), getProductsForAdmin);
 router.patch('/approve', protect, isAdmin, approveProduct);
 router.patch('/reject', protect, isAdmin, rejectProduct);
